@@ -46,15 +46,13 @@ Also confirm:
 
 ## 📦 Installation
 
-https://learn.microsoft.com/en-us/powershell/scripting/install/installing-powershell-on-windows?view=powershell-7.5
+- https://learn.microsoft.com/en-us/powershell/?view=powershell-7.5
+- https://slproweb.com/products/Win32OpenSSL.html (Win64 OpenSSL Light)
 
 Download example:
-
+```powershell
 curl https://raw.githubusercontent.com/demesg/LetsEncryptWebport/refs/heads/main/LetsEncryptWebport.ps1 -o C:\Temp\LetsEncryptWebport.ps1
-
-Run using PowerShell 7:
-
-C:\Temp\LetsEncryptWebport.ps1
+```
 
 ---
 
@@ -135,24 +133,29 @@ Example JSON structure:
 }
 
 Usage example:
+```powershell
 .\LetsEncryptWebport.ps1 -IssueCert -DnsPlugin Azure -PluginArgsFile C:\secure\plugin.json -PfxPass "secret"
-
+```
 ---
 
 ## 🏗 Usage Examples
 
 Request certificate and build P12:
+```powershell
 .\LetsEncryptWebport.ps1 -IssueCert -ExportPfx -DnsPlugin Azure -PluginArgsFile C:\secure\plugin.json -PfxPass "secret"
-
+```
 Use Cloudflare:
+```powershell
 .\LetsEncryptWebport.ps1 -IssueCert -DnsPlugin Cloudflare -PluginArgsFile C:\secure\cf.json -PfxPass "secret"
-
+```
 Failsafe cleanup:
+```powershell
 .\LetsEncryptWebport.ps1 -failsafe
-
+```
 Create weekly task:
+```powershell
 .\LetsEncryptWebport.ps1 -CreateScheduledTask
-
+```
 ---
 
 ## 🔍 WebPort Database Fields
@@ -193,8 +196,9 @@ No ACME requests occur.
 PfxPass must NOT be used with failsafe.
 
 Example:
+```powershell
 .\LetsEncryptWebport.ps1 -failsafe
-
+```
 ---
 
 ## ⏰ Scheduled Weekly Renewal
@@ -208,8 +212,9 @@ The script can create an automated weekly scheduled task that renews certificate
 Trigger: Weekly
 
 Generate using:
+```powershell
 .\LetsEncryptWebport.ps1 -CreateScheduledTask
-
+```
 ---
 
 ## ⚠ Important Notes
