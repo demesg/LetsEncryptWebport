@@ -53,9 +53,42 @@ It reads CSR and certificate metadata directly from the WebPort SQLite database 
 | `-failsafe` | Clears SSL from DB, keystore & restarts WebPort |
 
 ---
+### 1) When requesting ACME certificates, Let’s Encrypt must verify that you control the domain.
+If you use DNS-01 challenges, this is done by automatically creating special TXT records under the domain.
+To automate this step, Posh-ACME uses DNS plugins.
 
-## 🔐 Plugin Arguments
+Each plugin knows how to talk to a specific DNS provider’s API.
+https://poshac.me/docs/v4/Plugins/
+# 📄 What is `PluginArgsFile`?
 
-### Providing plugin configuration  
-You can pass DNS plugin configuration using:  
+`PluginArgsFile` is a configuration file (typically **JSON**) that contains DNS plugin–specific parameters used by **Posh-ACME** when performing ACME DNS-01 validation.
 
+Instead of supplying `-PluginArgs` inline, you store them in a file and load them automatically.
+
+This is useful because:
+
+✅ Keeps credentials out of shell history  
+✅ Easier to reuse and maintain  
+✅ Good for automation and CI/CD  
+✅ Easy to swap DNS providers (Azure, Cloudflare, Route53, etc.)  
+
+---
+
+## Why use `PluginArgsFile`?
+
+Example without PluginArgsFile:
+
+```powershell
+New-PACertificate example.com -DnsPlugin Azure -PluginArgs @{
+    AZSubscriptionId = "xxxxx"
+    AZAccessToken    = "xxxxx"
+    AZResourceGroup  = "DNS"
+    AZZoneName       = "example.com"
+}
+```
+
+### 2) Download the script
+
+```powershell
+curl "https://raw.githubusercontent.com/demesg/LetsEncryptWebport/refs/heads/main/LetsEncryptWebport.ps1" -o "C:\Temp\LetsEncryptWebport.ps1"
+```
