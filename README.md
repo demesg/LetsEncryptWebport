@@ -15,6 +15,7 @@ It reads CSR and certificate metadata directly from the WebPort SQLite database 
 ✔ Loads DNS plugin parameters from external file  
 ✔ Generates and installs `.p12` into WebPort  
 ✔ Updates WebPort DB: leaf, intermediate, root  
+✔ Installs certificate in LocalMachine\My (Computer Personal Store)  
 ✔ Removes old certificates from the Windows certificate store  
 ✔ Automatically sets Windows firewall rule for WebPort port  
 ✔ Restarts WebPort (service or EXE) automatically  
