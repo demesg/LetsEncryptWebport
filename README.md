@@ -46,13 +46,15 @@ Also confirm:
 
 ## 📦 Installation
 
+https://learn.microsoft.com/en-us/powershell/scripting/install/installing-powershell-on-windows?view=powershell-7.5
+
 Download example:
 
 curl https://raw.githubusercontent.com/demesg/LetsEncryptWebport/refs/heads/main/LetsEncryptWebport.ps1 -o C:\Temp\LetsEncryptWebport.ps1
 
 Run using PowerShell 7:
 
-pwsh C:\Temp\LetsEncryptWebport.ps1
+C:\Temp\LetsEncryptWebport.ps1
 
 ---
 
