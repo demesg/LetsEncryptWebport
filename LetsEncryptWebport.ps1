@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
 Automates SSL certificate management for Kiona WebPort using ACME/Let’s Encrypt.
 
@@ -11,7 +11,7 @@ Normal mode ("Normal" ParameterSet):
   • Uses any Posh-ACME DNS plugin (default: Azure)
   • Updates certificate chain (leaf / intermediate / root) in WebPort database
   • Builds WebPort-compatible P12 file
-  • Installs certificate into LocalMachine\My (performed in ExportPfx step)
+  • Installs certificate into LocalMachine\My (performed in InstallPfx step)
   • Ensures firewall port is enabled
   • Requires PfxPass in Normal mode
 
@@ -23,6 +23,55 @@ Failsafe mode ("FailSafe" ParameterSet):
   • Restarts WebPort
   • Must NOT be combined with PfxPass
   • Performs NO ACME actions
+
+SecretStore is used to store the script’s sensitive parameters.
+  1. The SecretStore modules are installed (SecretManagement + SecretStore)
+  2. A vault is registered and set as the default
+  3. The SecretStore is initialized if it does not already exist
+  4. The unlock password is stored in an XML file (e.g., securePassword.xml)
+  5. SecretStore is automatically unlocked during script execution
+  6. Secrets are read from the vault:
+    • PluginArgs – DNS plugin parameters for ACME/Posh-ACME
+    • PfxPass – password for the WebPort .p12 file
+    • SmtpPwd – password for the SMTP account
+
+.EXAMPLE
+# Adding DNS plugin arguments to SecretStore:
+$pArgs = @{
+    AZSubscriptionId = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+    AZTenantId       = "yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy"
+    AZAppUsername    = "zzzzzzzz-zzzz-zzzz-zzzz-zzzzzzzzzzzz"
+    AZCertThumbprint = "ABCDEF1234567890ABCDEF1234567890ABCDEF12"
+    AZResourceGroup  = "DNS"
+    AZZoneName       = "example.com"
+}
+Set-Secret -Name PluginArgs -Secret $pArgs
+
+.EXAMPLE
+# Adding the password for the WebPort PFX:
+Set-Secret -Name PfxPass -Secret "MyStrongPassword"
+
+.EXAMPLE
+# Adding the SMTP password:
+Set-Secret -Name SmtpPwd -Secret "S3cur3!"
+
+.EXAMPLE
+# Listing all secrets stored in SecretStore:
+Get-SecretInfo
+
+.EXAMPLE
+# Retrieving a secret:
+Get-Secret -Name PluginArgs -AsPlainText
+
+.EXAMPLE
+# Removing a secret:
+Remove-Secret -Name PluginArgs
+
+.EXAMPLE
+# Resetting the entire SecretStore vault:
+Unregister-SecretVault -Name SecretStore
+Remove-Item "$env:LOCALAPPDATA\Microsoft\PowerShell\secretmanagement\secretstore" -Recurse -Force
+
 
 DNS PLUGIN SUPPORT
 The script supports any DNS plugin via Posh-ACME:
@@ -63,16 +112,16 @@ NOTES
   • Requires administrative privileges
   • Initial CSR must be created in WebPort GUI
   • Default DNS plugin: Azure, but user may change via -DnsPlugin
-  • Only ExportPfx installs the certificate into certstore
+  • Only InstallPfx installs the certificate into certstore
 
 PARAMETERS
   -failsafe
-      Resets SSL data without ACME. Must NOT be combined with PfxPass.
+      Resets SSL data without ACME. Must NOT be combined with other params.
 
   -IssueCert
       Requests/renews certificate via ACME using the existing CSR.
 
-  -ExportPfx
+  -InstallPfx
       Builds webport.p12 and installs certificate into certstore.
 
   -DnsPlugin
@@ -95,7 +144,7 @@ PARAMETERS
       DNS resource group, used by Azure.
 
 .EXAMPLE
-PS> .\LetsEncryptWebport.ps1 -IssueCert -ExportPfx -PfxPass "secret"
+PS> .\LetsEncryptWebport.ps1 -IssueCert -InstallPfx -PfxPass "secret"
 
 .EXAMPLE
 PS> .\LetsEncryptWebport.ps1 -IssueCert -DnsPlugin "Cloudflare" `
@@ -112,42 +161,61 @@ PS> .\LetsEncryptWebport.ps1 -failsafe
     Original Author:  Magnus Ardström  
 
 .REVISION
-    Version:          1.0.0
-    Last Updated:     2025-11-09
+    Version:          1.1.0
+    Last Updated:     2025-11-17
 #>
 
 
 [CmdletBinding(DefaultParameterSetName="Normal")]
 param(
-    [Parameter(ParameterSetName="Normal", Mandatory=$true)]
-    [string]$PfxPass,
     [Parameter(ParameterSetName="FailSafe", Mandatory=$true)]
     [switch]$failsafe,
+
+    [Parameter(ParameterSetName="CreateScheduledTask", Mandatory=$true)]
+    [switch]$CreateScheduledTask,
+
     [Parameter(ParameterSetName="Normal")]
     [Parameter(ParameterSetName="FailSafe")]
+    [Parameter(ParameterSetName="CreateScheduledTask")]
+    [string]$WebPortDataPath = "C:\ProgramData\WebPort",
+
+    [Parameter(ParameterSetName="Normal")]
+    [Parameter(ParameterSetName="FailSafe")]
+    [Parameter(ParameterSetName="CreateScheduledTask")]
+    [string]$WebPortProgPath = "C:\Program Files\WebPort",
+
+    [Parameter(ParameterSetName="Normal")]
+    [Parameter(ParameterSetName="FailSafe")]
+    [Parameter(ParameterSetName="CreateScheduledTask")]
+    [int]$ServerPort = "8090",
+
+    [Parameter(ParameterSetName="Normal")]
+    [Parameter(ParameterSetName="FailSafe")]
+    [Parameter(ParameterSetName="CreateScheduledTask")]
     [switch]$IssueCert,
+
     [Parameter(ParameterSetName="Normal")]
     [Parameter(ParameterSetName="FailSafe")]
-    [switch]$ExportPfx,
+    [Parameter(ParameterSetName="CreateScheduledTask")]
+    [switch]$InstallPfx,
+
     [Parameter(ParameterSetName="Normal")]
     [Parameter(ParameterSetName="FailSafe")]
-    [string]$ZoneName ,
+    [Parameter(ParameterSetName="CreateScheduledTask")]
+    [string]$DnsPlugin,
+
     [Parameter(ParameterSetName="Normal")]
     [Parameter(ParameterSetName="FailSafe")]
-    [string]$ResourceGroup ,
+    [Parameter(ParameterSetName="CreateScheduledTask")]
+    [string]$PluginArgsFile,
+
     [Parameter(ParameterSetName="Normal")]
     [Parameter(ParameterSetName="FailSafe")]
-    [string]$script:WebPortDataPath = "C:\ProgramData\WebPort",
-    [Parameter(ParameterSetName="Normal")]
-    [Parameter(ParameterSetName="FailSafe")]
-    [string]$script:WebPortProgPath = "C:\Program Files\WebPort",
-    [Parameter(ParameterSetName="Normal")]
-    [Parameter(ParameterSetName="FailSafe")]
-    [string]$DnsPlugin ,
-    [Parameter(ParameterSetName="Normal")]
-    [Parameter(ParameterSetName="FailSafe")]
-    [string]$PluginArgsFile
+    [Parameter(ParameterSetName="CreateScheduledTask")]
+    [string]$Sendmail  
+
 )
+
 $banner = @'
   _          _       ______                             _    __          __  _     _____           _   
  | |        | |     |  ____|                           | |   \ \        / / | |   |  __ \         | |  
@@ -161,15 +229,8 @@ $banner = @'
 
 Write-Host $banner -ForegroundColor Magenta
 
-# Om Normal-set används, lägg PfxPass i script-scope
-if ($PSCmdlet.ParameterSetName -eq "Normal") {
-    $script:PfxPass = $PfxPass
-}
-
-
 [string]$script:SqliteDllPath  = "$WebPortProgPath\System.Data.SQLite.dll"
 [string]$script:WebPortDbPath  = "$WebPortDataPath\db\webport.sqlite"
-$script:PfxPass  = $PfxPass 
 
 $ErrorActionPreference = "Stop"
 
@@ -216,12 +277,84 @@ function Read-WebPortSettings {
 
     return $data
 }
+
+function Get-WebPortServerPort {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$WebPortDataPath
+    )
+
+    $confPath = Join-Path $WebPortDataPath "webport.conf"
+
+    if (-not (Test-Path $confPath)) {
+        throw "webport.conf saknas: $confPath"
+    }
+
+    try {
+        $confRaw = Get-Content $confPath -Raw -ErrorAction Stop
+        $conf    = $confRaw | ConvertFrom-Json -ErrorAction Stop
+    }
+    catch {
+        throw "Kunde inte läsa eller parsa webport.conf → $($_.Exception.Message)"
+    }
+
+    if (-not $conf.default -or -not $conf.default.ServerPort) {
+        throw "ServerPort saknas i webport.conf"
+    }
+
+    return [int]$conf.default.ServerPort
+}
+
 function Set-WebPortServerPort {
     [CmdletBinding()]
     param(
+        [Parameter(Mandatory=$true)]
         [string]$WebPortDataPath,
+
+        [Parameter(Mandatory=$true)]
         [int]$ServerPort
     )
+
+    $confPath = Join-Path $WebPortDataPath "webport.conf"
+
+    if (-not (Test-Path $confPath)) {
+        throw "webport.conf saknas: $confPath"
+    }
+
+    try {
+        $confRaw = Get-Content $confPath -Raw -ErrorAction Stop
+        $conf    = $confRaw | ConvertFrom-Json -ErrorAction Stop
+    }
+    catch {
+        throw "Kunde inte läsa eller parsa webport.conf → $($_.Exception.Message)"
+    }
+
+    if (-not $conf.default) {
+        throw "Ogiltig konfig: 'default' saknas i webport.conf"
+    }
+
+    # Sätt ny port
+    $conf.default.ServerPort = $ServerPort
+
+    # Skriv tillbaka
+    $conf | ConvertTo-Json -Depth 10 | Set-Content -Path $confPath -Encoding UTF8
+
+    return $ServerPort
+}
+
+function Set-WebPortServerPort {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$WebPortDataPath,
+
+        [Parameter(Mandatory=$true)]
+        [ValidateRange(1,65535)]
+        [int]$ServerPort
+    )
+
+    Write-Host "==> Uppdaterar WebPort ServerPort…" -ForegroundColor Cyan
 
     $confPath = Join-Path $WebPortDataPath "webport.conf"
 
@@ -234,30 +367,56 @@ function Set-WebPortServerPort {
             }
         }
 
-        $defaultConf | ConvertTo-Json -Depth 5 | 
-            Set-Content -Path $confPath -Encoding UTF8
+        try {
+            $defaultConf | ConvertTo-Json -Depth 5 | Set-Content -Path $confPath -Encoding UTF8
+            Write-Host "✓ webport.conf skapad med ServerPort=$ServerPort" -ForegroundColor Green
+        }
+        catch {
+            throw "Kunde inte skriva webport.conf → $($_.Exception.Message)"
+        }
 
-        Write-Host "✅ webport.conf skapad"
         return $ServerPort
     }
 
-    $confRaw = Get-Content $confPath -Raw -ErrorAction Stop
-    $conf    = $confRaw | ConvertFrom-Json -ErrorAction Stop
+    try {
+        $confRaw = Get-Content $confPath -Raw -ErrorAction Stop
+    }
+    catch {
+        throw "Kunde inte läsa webport.conf → $($_.Exception.Message)"
+    }
 
+    try {
+        $conf = $confRaw | ConvertFrom-Json -ErrorAction Stop
+    }
+    catch {
+        Write-Host "⚠ webport.conf är korrupt JSON – återställer minimal struktur" -ForegroundColor Yellow
+
+        $conf = @{
+            default = @{
+                ServerPort = $ServerPort
+            }
+        }
+    }
+
+    # Säkerställ sektionen "default"
     if (-not $conf.default) {
         $conf | Add-Member -MemberType NoteProperty -Name "default" -Value @{ ServerPort = $ServerPort }
     }
 
-    if ($ServerPort) {
-        $conf.default.ServerPort = $ServerPort
+    # Uppdatera port
+    $conf.default.ServerPort = $ServerPort
+
+    try {
+        $conf | ConvertTo-Json -Depth 10 |
+            Set-Content -Path $confPath -Encoding UTF8
+
+        Write-Host "✓ WebPort ServerPort uppdaterad → $ServerPort" -ForegroundColor Green
+    }
+    catch {
+        throw "Kunde inte skriva uppdaterad webport.conf → $($_.Exception.Message)"
     }
 
-    $conf | ConvertTo-Json -Depth 10 |
-        Set-Content -Path $confPath -Encoding UTF8
-
-    Write-Host "✅ WebPort ServerPort uppdaterad → $($conf.default.ServerPort)" -ForegroundColor Green
-
-    return $conf.default.ServerPort
+    return $ServerPort
 }
 
 function Normalize-Pem {
@@ -417,7 +576,7 @@ function Reset-WebPortSSL {
     }
 
     Write-Host ""
-    Write-Host "   ✅ SSL-data har rensats från WebPort DB." -ForegroundColor Green
+    Write-Host "   ✓ SSL-data har rensats från WebPort DB." -ForegroundColor Green
     Write-Host ""
 }
 
@@ -474,9 +633,10 @@ function Restart-WebPort {
         Write-Host "   ℹ WebPort var inte igång tidigare → startas ej"
     }
 
-    Write-Host "   ✅ WebPort omstart klar." -ForegroundColor Green
+    Write-Host "   ✓ WebPort omstart klar." -ForegroundColor Green
     Write-Host ""
 }
+
 function Read-PluginArgsFile {
     [CmdletBinding()]
     param(
@@ -493,7 +653,7 @@ function Read-PluginArgsFile {
     # 1) JSON-format
     try {
         $json = $raw | ConvertFrom-Json -ErrorAction Stop
-        Write-Host "   ✅ PluginArgs importerad från JSON → $Path" -ForegroundColor Green
+        Write-Host "   ✓ PluginArgs importerad från JSON → $Path" -ForegroundColor Green
         return $json
     }
     catch {
@@ -522,7 +682,7 @@ function Read-PluginArgsFile {
     }
 
     if ($args.Count -gt 0) {
-        Write-Host "   ✅ PluginArgs importerad som Key=Value-format → $Path" -ForegroundColor Green
+        Write-Host "   ✓ PluginArgs importerad som Key=Value-format → $Path" -ForegroundColor Green
         return $args
     }
 
@@ -543,7 +703,7 @@ function Ensure-WebPortFirewallRule {
     # Finns redan?
     $existing = Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue
     if ($existing) {
-        Write-Host "   ✅ Brandväggsregel finns redan: $ruleName" -ForegroundColor Green
+        Write-Host "   ✓ Brandväggsregel finns redan: $ruleName" -ForegroundColor Green
         return
     }
 
@@ -559,7 +719,7 @@ function Ensure-WebPortFirewallRule {
         -Profile Any `
         | Out-Null
 
-    Write-Host "   ✅ Brandväggsregel skapad: $ruleName" -ForegroundColor Green
+    Write-Host "   ✓ Brandväggsregel skapad: $ruleName" -ForegroundColor Green
 }
 
 function Ensure-PoshAcme {
@@ -576,7 +736,7 @@ function Ensure-PoshAcme {
 
         try {
             Install-Module Posh-ACME -Scope AllUsers -Force -AllowClobber -ErrorAction Stop
-            Write-Host "   ✅ Posh-ACME installerad" -ForegroundColor Green
+            Write-Host "   ✓ Posh-ACME installerad" -ForegroundColor Green
         }
         catch {
             Write-Host "   ❌ Kunde inte installera Posh-ACME:" -ForegroundColor Red
@@ -585,17 +745,228 @@ function Ensure-PoshAcme {
         }
     }
     else {
-        Write-Host "   ✅ Posh-ACME är installerad" -ForegroundColor Green
+        Write-Host "   ✓ Posh-ACME är installerad" -ForegroundColor Green
     }
 
     # Importera
     try {
         Import-Module Posh-ACME -ErrorAction Stop
-        Write-Host "   ✅ Modul importerad" -ForegroundColor Green
+        Write-Host "   ✓ Modul importerad" -ForegroundColor Green
     }
     catch {
         Write-Host "   ❌ Kunde inte importera Posh-ACME" -ForegroundColor Red
         throw
+    }
+}
+
+function Send-WebPortMail {
+    param(
+        [Parameter(Mandatory=$true)] [string]$To,
+        [Parameter(Mandatory=$true)] [string]$Subject,
+        [Parameter(Mandatory=$true)] [string]$Body
+    )
+
+    $Settings = Read-WebPortSettings
+
+    $smtpServer    = $Settings["smtpserver"]
+    $smtpPort      = [int]$Settings["smtpport"]
+    $smtpSsl       = [bool]$Settings["smtpssl"]
+    $smtpEncoding  = $Settings["smtpencoding"]
+    $smtpFrom      = $Settings["smtpfrom"]
+    $smtpUser      = $Settings["smtpuser"]
+
+    if (-not $smtpServer) { throw "SMTP server saknas i WebPort DB." }
+    if (-not $smtpFrom)   { throw "SMTP avsändaradress saknas i WebPort DB." }
+
+    try {
+        $SmtpPwd = ConvertTo-SecureString -String 'vH0z1oix73VfSaLs' -AsPlainText -Force
+    }
+    catch {
+        throw "Kunde inte dekryptera SMTP-lösenordet (smtppassword) i databasen."
+    }
+
+    $credential = New-Object System.Management.Automation.PSCredential($smtpUser, $SmtpPwd)
+    Write-Host "smtpUser: $smtpUser to: $To subject: $Subject server: $smtpServer port: $smtpPort ssl: $smtpSsl from: $smtpFrom"
+    # Mail message
+    $msg = New-Object System.Net.Mail.MailMessage
+    $msg.From = $smtpFrom
+    $msg.To.Add($To)
+    $msg.Subject = $Subject
+    $msg.Body = $Body
+
+    try {
+        if ($smtpEncoding) {
+            $msg.BodyEncoding = [System.Text.Encoding]::GetEncoding($smtpEncoding)
+        }
+        else {
+            $msg.BodyEncoding = [System.Text.Encoding]::UTF8
+        }
+    }
+    catch {
+        Write-Warning "Kunde inte använda encoding '$smtpEncoding'. Använder UTF-8."
+        $msg.BodyEncoding = [System.Text.Encoding]::UTF8
+    }
+
+    # SMTP client
+    $smtp = New-Object System.Net.Mail.SmtpClient($smtpServer, $smtpPort)
+    $smtp.EnableSsl = $smtpSsl
+    $smtp.Credentials = $credential
+    $smtp.Timeout = 15000   # 15 sek timeout
+
+    try {
+        $smtp.Send($msg)
+        Write-Host "✓ Mail skickat till $To" -ForegroundColor Green
+        return $true
+    }
+    catch {
+        Write-Host "✖ Misslyckades att skicka mail:" -ForegroundColor Red
+        Write-Host "  Fel: $($_.Exception.Message)"
+        if ($_.Exception.InnerException) {
+            Write-Host "  Inner: $($_.Exception.InnerException.Message)"
+        }
+        return $false
+    }
+}
+
+function Add-Log {
+    param(
+        [string]$Text,
+        [ValidateSet("Information","Warning","Error")]
+        [string]$Level = "Information"
+    )
+
+    # 1) Intern logg (StringBuilder)
+    $IssueCertLog.AppendLine("[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] $Level : $Text") | Out-Null
+
+    # 2) EventLog Setup
+    $logName = "Application"
+    $source  = "WebPort-LetsEncrypt"
+
+    if (-not [System.Diagnostics.EventLog]::SourceExists($source)) {
+        try {
+            New-EventLog -LogName $logName -Source $source
+        }
+        catch {
+            # Om scriptet körs utan admin första gången kan detta misslyckas
+            # Vi loggar då bara internt
+            $IssueCertLog.AppendLine("WARNING: EventLog source could not be created: $($_.Exception.Message)") | Out-Null
+            return
+        }
+    }
+
+    # 3) Mappa Level till EventLog-type
+    switch ($Level) {
+        "Information" { $entryType = [System.Diagnostics.EventLogEntryType]::Information }
+        "Warning"     { $entryType = [System.Diagnostics.EventLogEntryType]::Warning }
+        "Error"       { $entryType = [System.Diagnostics.EventLogEntryType]::Error }
+    }
+
+    # 4) Skriv loggpost
+    try {
+        Write-EventLog -LogName $logName -Source $source -EntryType $entryType -EventId 1000 -Message $Text
+    }
+    catch {
+        $IssueCertLog.AppendLine("ERROR: Failed to write to EventLog: $($_.Exception.Message)") | Out-Null
+    }
+}
+
+$ScriptRoot = Split-Path -Parent $PSCommandPath
+$SecurePasswordPath = Join-Path $ScriptRoot "securePassword.xml"
+
+
+$IssueCertLog = New-Object System.Text.StringBuilder
+$UseSecretStore = $true
+if ($UseSecretStore) {
+
+    Write-Host "==> SecretStore" -ForegroundColor Cyan
+
+    # Säkerställ modul
+    if (-not (Get-Module -ListAvailable -Name Microsoft.PowerShell.SecretStore)) {
+        Write-Host "   ⚠ SecretStore modul saknas → installerar…" -ForegroundColor Yellow
+        Install-Module Microsoft.PowerShell.SecretStore -Force -Scope AllUsers
+    }
+
+    Import-Module Microsoft.PowerShell.SecretStore -ErrorAction Stop
+    Write-Host "   ✓ SecretStore laddad" -ForegroundColor Green
+
+    # Kontrollera om SecretStore är initierad
+    $storeInfo = Get-SecretStoreConfiguration -ErrorAction SilentlyContinue
+
+    if (-not $storeInfo) {
+        Write-Host "   ⚠ SecretStore inte initierad → initierar…" -ForegroundColor Yellow
+
+        Set-SecretStoreConfiguration `
+            -Scope AllUsers `
+            -Authentication Password `
+            -Confirm:$false
+
+        Initialize-SecretStore `
+            -Password (Read-Host "Ange nytt SecretStore-lösenord" -AsSecureString)
+
+        Write-Host "   ✓ SecretStore initierad" -ForegroundColor Green
+    }
+
+    # Kontrollera lösenordsfil
+    if (-not (Test-Path $SecurePasswordPath)) {
+        Write-Host "   ⚠ securePasswordPath saknas → skapar..." -ForegroundColor Yellow
+
+        $pwd = Read-Host "Ange SecretStore-lösenord för export" -AsSecureString
+        $pwd | Export-CliXml -Path $SecurePasswordPath
+
+        Write-Host "   ✓ Lösenord exporterat till $SecurePasswordPath" -ForegroundColor Green
+    }
+
+    # Lås upp SecretStore
+    $password = Import-CliXml -Path $SecurePasswordPath
+    Unlock-SecretStore -Password $password -ErrorAction Stop
+    Write-Host "   ✓ SecretStore upplåst" -ForegroundColor Green
+
+    try {
+        $PluginArgs = Get-Secret -Name "PluginArgs" -AsPlainText
+        Write-Host "   ✓ PluginArgs lästa från SecretStore" -ForegroundColor Green
+    }
+    catch {
+Write-Host @"
+Secret 'PluginArgs' saknas i SecretStore.
+
+Du måste skapa PluginArgs baserat på DNS-pluginet du använder.
+Följ plugin-guiden för ditt DNS-system:
+    https://poshac.me/docs/v4/Plugins/
+
+För Azure (certifikatbaserad autentisering – rekommenderad modell):
+-------------------------------------------------------------
+$($([char]36))pArgs = @{
+    AZSubscriptionId   = 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'
+    AZAccessToken      = 'ey.........'
+    AZResourceGroup    = 'Resourcegroup name'
+    AZZoneName         = 'example.com'
+}
+
+Spara PluginArgs i SecretStore:
+-------------------------------------------------------------
+Set-Secret -Name PluginArgs -Secret `$pArgs
+
+Kontrollera plugin-guiden för andra leverantörer och deras nödvändiga fält.
+
+När PluginArgs är korrekt inlagda i SecretStore, kör scriptet igen.
+"@
+          throw "Secret 'PluginArgs' saknas i SecretStore. Skapa och lägg till enligt instruktioner ovan."        
+    }
+
+    try {
+        $PfxPass = Get-Secret -Name "PfxPass" -AsPlainText
+        Write-Host "   ✓ PfxPass läst från SecretStore" -ForegroundColor Green
+    }
+    catch {
+        throw "Secret 'PfxPass' saknas i SecretStore. Lägg till med: Set-Secret -Name PfxPass -Secret 'hemligt'"
+    }
+
+    try {
+        $SmtpPwd = Get-Secret -Name "SmtpPwd" -AsPlainText
+        Write-Host "   ✓ SmtpPwd läst från SecretStore" -ForegroundColor Green
+    }
+    catch {
+        throw "Secret 'SmtpPwd' saknas i SecretStore. Lägg till med: Set-Secret -Name SmtpPwd -Secret 'hemligt'"
     }
 }
 
@@ -608,7 +979,7 @@ if ($PSVersionTable.PSVersion -lt $minPS) {
     Write-Host "   https://learn.microsoft.com/powershell/scripting/install/installing-powershell"
     throw "PowerShell version för låg"
 }
-Write-Host "   ✅ PowerShell version OK: $($PSVersionTable.PSVersion)" -ForegroundColor Green
+Write-Host "   ✓ PowerShell version OK: $($PSVersionTable.PSVersion)" -ForegroundColor Green
 
 # Kontroll: Adminrättigheter
 $IsAdmin = ([Security.Principal.WindowsPrincipal] `
@@ -621,8 +992,18 @@ if (-not $IsAdmin) {
     Write-Host "   Högerklicka → 'Run as Administrator'"
     throw "Ej administratör"
 }
+Write-Host "   ✓ Administratörsrättigheter OK" -ForegroundColor Green
 
-Write-Host "   ✅ Administratörsrättigheter OK" -ForegroundColor Green
+if ($ServerPort -ne (Get-WebPortServerPort -WebPortDataPath $WebPortDataPath)) {
+    step "Sätter WebPort ServerPort till $ServerPort"
+    Write-Host "   ✓ Sätter WebPort ServerPort till $ServerPort" -ForegroundColor Green
+    $newPort = Set-WebPortServerPort -WebPortDataPath $WebPortDataPath -ServerPort $ServerPort
+    Ensure-WebPortFirewallRule -ServerPort $newPort
+    Restart-WebPort
+    Write-Host "`n✓ WebPort cleanup klar" -ForegroundColor Green
+    ok "WebPort ServerPort satt till $newPort"
+}
+
 if (!$failsafe) {
     step "Säkerställer att PoshAcme är installerad"
     Ensure-PoshAcme
@@ -691,152 +1072,6 @@ if (!$failsafe) {
     ok "webport.conf läst"
 }
 
-if ($IssueCert) {
-    step "Förnyar cert via ACME (CSR mode)"
-
-    if ($DnsPlugin -eq "Azure") {
-        # Auto-populate Azure
-        $ctx = Get-AzContext
-        $token = (Get-AzAccessToken -ResourceUrl "https://management.azure.com/").Token | ConvertFrom-SecureString -AsPlainText
-
-        $PluginArgs = @{
-            AZSubscriptionId = $ctx.Subscription.Id
-            AZAccessToken    = $token
-            AZResourceGroup  = $ResourceGroup
-            AZZoneName       = $ZoneName
-        }
-    } elseif ($PluginArgsFile) {
-        step "Läser PluginArgs från fil"
-        $PluginArgs = Read-PluginArgsFile -Path $PluginArgsFile
-        ok "PluginArgs lästa"
-    }
-    else {
-        throw "Ingen PluginArgsFile angiven!"
-    }
-
-    New-PACertificate `
-        -CSR $csrFile `
-        -DnsPlugin $DnsPlugin `
-        -PluginArgs $PluginArgs `
-        -Verbose
-    Complete-PAOrder
-
-    $pa = Get-PACertificate
-    if (!$pa) { 
-        write-host "Get-PACertificate → tomt resultat (Förmodligen fel i DNS-plugin parameter)"
-        write-host "$($PluginArgs|ConvertTo-Json)"  
-    }
-
-    # Full chain
-    $full = Get-Content $pa.FullChainFile -Raw
-
-    # Dela upp kedjan
-    $certs = $full -split "-----END CERTIFICATE-----"
-    $certs = $certs | ForEach-Object { ($_ + "-----END CERTIFICATE-----") } |
-        Where-Object { $_ -match "BEGIN CERTIFICATE" }
-
-    $leaf  = if ($certs.Count -ge 1) { $certs[0] } else { "" }
-    $inter = if ($certs.Count -ge 2) { $certs[1] } else { "" }
-
-    # Hämta root PEM
-    $rootUrl = "https://letsencrypt.org/certs/isrgrootx1.pem.txt"
-    $rootPem = Invoke-WebRequest -Uri $rootUrl -UseBasicParsing | Select-Object -ExpandProperty Content
-
-    Update-WebPortCertChain -LeafPem $leaf -IntermediatePem $inter -RootPem $rootPem -DeviceGuid $DeviceGuid 
-}
-
-if ($ExportPfx) {
-
-    step "Bygger webport.p12"
-
-    $openssl = Test-OpenSSL
-    if (-not $openssl) {
-        throw "OpenSSL saknas – installera först! https://slproweb.com/products/Win32OpenSSL.html"
-    }
-
-    $tmp = $env:TEMP
-    $pfxTemp = Join-Path $tmp "webport_temp.pfx"
-
-    # Paths för pem-material
-    $privKeyPath = Join-Path $tmp "privkey.pem"
-    $certPath    = Join-Path $tmp "cert.pem"
-    $chainPath   = Join-Path $tmp "chain.pem"
-
-    $cert = Get-ChildItem Cert:\LocalMachine\My |
-        Where-Object { $_.Subject -eq "CN=$CN" }
-
-    if ($cert) {
-
-        Write-Host "✅ Cert hittades i LocalMachine\My → exporterar"
-        
-        $pfxBytes = $cert.Export(
-            [System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx,
-            $PfxPass
-        )
-
-        [System.IO.File]::WriteAllBytes($pfxTemp, $pfxBytes)
-
-        # Extrahera key + cert från PFX
-        & $openssl pkcs12 -in  $pfxTemp -nodes -nokeys  -out $certPath    -password pass:$PfxPass
-        & $openssl pkcs12 -in  $pfxTemp -nodes -nocerts -out $privKeyPath -password pass:$PfxPass
-        & $openssl pkcs12 -in  $pfxTemp -nodes -nokeys  -out $chainPath   -password pass:$PfxPass
-    }
-    else {
-
-        Write-Host "⚠ Cert saknas i LocalMachine\My → hämtar material från DB"
-
-        # ============================
-        # 2) Läs cert/nyckel från DB
-        # ============================
-        $Settings   = Read-WebPortSettings
-        $SSLPPK  = $Settings["SSLPPK"]
-        $SSLCAPC = $Settings["SSLCAPC"]
-        $SSLCAIC = $Settings["SSLCAIC"]
-        $SSLCARC = $Settings["SSLCARC"]
-
-        if (-not $SSLPPK) {
-            throw "Ingen privat nyckel hittad i DB (SSLPPK)"
-        }
-        if (-not $SSLCAPC) {
-            throw "SSLCAPC (leaf cert) saknas i DB"
-        }
-
-        # Skriv PEM-material till fil
-        Set-Content -Path $privKeyPath -Value $SSLPPK   -Encoding ascii
-        Set-Content -Path $certPath    -Value $SSLCAPC  -Encoding ascii
-
-        # Bygg chain.pem
-        $chainPem = ""
-
-        if ($SSLCAIC) { $chainPem += $SSLCAIC + "`n" }
-        if ($SSLCARC) { $chainPem += $SSLCARC + "`n" }
-
-        if ($chainPem -ne "") {
-            Set-Content -Path $chainPath -Value $chainPem -Encoding ascii
-        }
-        else {
-            Write-Warning "Ingen intermediate/root certkedja hittad i DB"
-            # Skapa tom fil för openssl
-            Set-Content -Path $chainPath -Value "" -Encoding ascii
-        }
-    }
-
-    & $openssl pkcs12 -export `
-        -inkey    $privKeyPath `
-        -in       $certPath `
-        -certfile $chainPath `
-        -out      "$WebPortDataPath\webport.p12"`
-        -password pass:$PfxPass
-
-    ok "P12 skapad → $WebPortDataPath\webport.p12"
-
-
-    step "Installerar cert i LocalMachine\My"
-    certutil -f -p $script:PfxPass -ImportPfx "$WebPortDataPath\webport.p12"
-    Restart-WebPort
-    ok "Cert installerat"
-}
-
 if ($failsafe){
     $Settings   = Read-WebPortSettings
 
@@ -851,17 +1086,16 @@ if ($failsafe){
         Write-Host "Ingen P12 hittad → hoppar över"
     }
 
-
     # RENSAR CERT I KEYSTORE
     $SSLCN = $Settings["SSLCN"]
 
     if ($SSLCN) {
-        Write-Host "SSLCN=$SSLCN"
+        Write-Host "   SSLCN=$SSLCN"
 
         # CN kan innehålla ";SAN..." → ta första
         $CN = ($SSLCN -split ";")[0]
 
-        Write-Host "Rensar cert i certstore för CN=$CN"
+        Write-Host "   Rensar cert i certstore för CN=$CN"
 
         $items = Get-ChildItem Cert:\LocalMachine\My |
             Where-Object { $_.Subject -eq "CN=$CN" }
@@ -874,11 +1108,348 @@ if ($failsafe){
     else {
         Write-Warning "SSLCN saknas i DB → hoppar över keystore-rensning"
     }
-
     Restart-WebPort
-
-    Write-Host "`n✅ WebPort cleanup klar" -ForegroundColor Green
+    Write-Host "   ✓ WebPort cleanup klar" -ForegroundColor Green
 
 }
 
-Write-Host "`n✅ KLART" -ForegroundColor Green
+if ($CreateScheduledTask) {
+
+    step "Skapar schemalagd uppgift för automatisering"
+
+    # Hitta PowerShell 7
+    $pwsh = Get-Command "pwsh.exe" -ErrorAction SilentlyContinue
+    if (-not $pwsh) {
+        throw "PowerShell 7 (pwsh.exe) not found. Install from: https://learn.microsoft.com/powershell/"
+    }
+
+    # Scriptets fulla sökväg
+    $ScriptPath = $PSCommandPath
+
+    # Lista för uppbyggning av argument
+    $argsList = @()
+
+    # === FIXA obligatoriska parametrar ===
+    $argsList += "-IssueCert"
+    $argsList += "-InstallPfx"
+
+    # === Dynamiska parametrar hämtas från scriptets körning ===
+
+    # Strängparametrar
+    if ($DnsPlugin)       { $argsList += "-DnsPlugin `"$DnsPlugin`"" }
+    if ($WebPortDataPath) { $argsList += "-WebPortDataPath `"$WebPortDataPath`"" }
+    if ($WebPortProgPath) { $argsList += "-WebPortProgPath `"$WebPortProgPath`"" }
+    if ($Sendmail)        { $argsList += "-Sendmail `"$Sendmail`"" }
+
+    # Bygg argumentsträngen för scheduled task
+    $finalArgs = "-NoLogo -NoProfile -File `"$ScriptPath`" $($argsList -join ' ')"
+
+    Write-Host "   Kommandorad för scheduled task:"
+    Write-Host "   pwsh.exe $finalArgs" -ForegroundColor Yellow
+
+    # Scheduled Task action
+    $action = New-ScheduledTaskAction -Execute $pwsh.Source -Argument $argumentString
+    $trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Sunday -At 2:00am
+    $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -RunLevel Highest
+    $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
+    $task = New-ScheduledTask -Action $action -Trigger $trigger -Principal $principal -Settings $settings
+
+    Register-ScheduledTask -TaskName $taskName -InputObject $task -Force
+    ok "Schemalagd uppgift '$taskName' skapad. Körs varje söndag kl 02:00 via PowerShell 7."
+    # wevtutil set-log Microsoft-Windows-TaskScheduler/Operational /e:true
+    return
+}
+
+
+if ($IssueCert) {
+
+    step "Startar IssueCert-process"
+    Add-Log "Startar IssueCert-process"
+
+    $Settings = Read-WebPortSettings
+    $SSLCN = $Settings["SSLCN"]
+
+    try {
+        if ($DnsPlugin -eq "Azure") {
+            Add-Log "DnsPlugin = Azure"
+
+            $ctx = Get-AzContext
+            if (-not $ctx) { Add-Log "Get-AzContext returnerade null"; throw "Ingen Azure-context" }
+
+            $token = (Get-AzAccessToken -ResourceUrl "https://management.azure.com/").Token | ConvertFrom-SecureString -AsPlainText
+
+            Add-Log "Azure-token genererad"
+
+            $PluginArgs = @{
+                AZSubscriptionId = $ctx.Subscription.Id
+                AZAccessToken    = $token
+                AZResourceGroup  = $ResourceGroup
+                AZZoneName       = $ZoneName
+            }
+
+            Add-Log "PluginArgs: **********"
+        }
+        elseif ($PluginArgsFile) {
+
+            step "Läser PluginArgs från fil"
+            Add-Log "Läser PluginArgsFile: $PluginArgsFile"
+
+            $PluginArgs = Read-PluginArgsFile -Path $PluginArgsFile
+
+            Add-Log "PluginArgs lästa: **********"
+            ok "PluginArgs lästa"
+        }
+        else {
+            $PluginArgs = Get-Secret -Name PluginArgs -AsPlainText | ConvertTo-Json
+            $PfxPass = Get-Secret -Name PfxPass    -AsPlainText
+            $SmtpPwd = Get-Secret -Name SmtpPwd    -AsPlainText
+        }
+            Add-Log "Cert finns: $($cert.Thumbprint), giltigt till: $($cert.NotAfter), dagar kvar: $daysLeft"
+
+        if (($PluginArgs) -and ($PfxPass) -and ($SmtpPwd)) {
+
+            $cert = Get-ChildItem Cert:\LocalMachine\My | Where-Object { $_.Subject -like "CN=$SSLCN" }
+            $daysLeft = ($cert.NotAfter - (Get-Date)).Days
+            
+            if ($daysLeft -lt 30 -or -not $cert) { 
+
+                Add-Log "Förnyar cert via ACME (CSR mode)"
+                pause
+                New-PACertificate `
+                    -CSR $csrFile `
+                    -DnsPlugin $DnsPlugin `
+                    -PluginArgs $PluginArgs `
+                    -Verbose
+
+                Add-Log "New-PACertificate körd OK"
+
+                Add-Log "Kör Complete-PAOrder"
+                Complete-PAOrder
+
+                Add-Log "Complete-PAOrder klar"
+
+                $pa = Get-PACertificate
+                if (!$pa) {
+                    Add-Log "ERROR: Get-PACertificate gav tomt resultat"
+                    Add-Log "Sannolik orsak: felaktiga DNS-plugin parametrar"
+
+                    write-host "Get-PACertificate → tomt resultat (Förmodligen fel i DNS-plugin parameter)"
+                    write-host "$($PluginArgs|ConvertTo-Json)"
+                }
+                else {
+                    Add-Log "Get-PACertificate OK: $($pa.Thumbprint)"
+                    Add-Log "Certificate giltigt till: $($pa.NotAfter)"
+                
+                }
+
+                # Full chain
+                Add-Log "Läser FullChainFile från $($pa.FullChainFile)"
+                $full = Get-Content $pa.FullChainFile -Raw
+
+                Add-Log "Delar upp cert-kedjan"
+                $certs = $full -split "-----END CERTIFICATE-----"
+                $certs = $certs | ForEach-Object { ($_ + "-----END CERTIFICATE-----") } |
+                Where-Object { $_ -match "BEGIN CERTIFICATE" }
+
+                $leaf = if ($certs.Count -ge 1) { Add-Log "Leaf cert OK"; $certs[0] } else { Add-Log "Leaf saknas"; "" }
+                $inter = if ($certs.Count -ge 2) { Add-Log "Intermediate cert OK"; $certs[1] } else { Add-Log "Intermediate saknas"; "" }
+
+                # Root PEM
+                $rootUrl = "https://letsencrypt.org/certs/isrgrootx1.pem.txt"
+                Add-Log "Hämtar Root PEM från $rootUrl"
+                $rootPem = Invoke-WebRequest -Uri $rootUrl -UseBasicParsing | Select-Object -ExpandProperty Content
+                Add-Log "Root PEM hämtad"
+
+                Update-WebPortCertChain -LeafPem $leaf -IntermediatePem $inter -RootPem $rootPem -DeviceGuid $DeviceGuid
+                Add-Log "WebPort-databasen uppdaterad med cert chain"
+            }
+            else {
+                Add-Log "Cert finns: $($cert.Thumbprint), giltigt till: $($cert.NotAfter), dagar kvar: $daysLeft" -Level Information
+                Write-Host "   ✓ Cert finns och är giltigt i $daysLeft dagar → ingen förnyelse behövs" -ForegroundColor Green
+                break
+            }
+            
+        }
+        else {
+            Write-Warning "Ett eller flera secrets saknas. Avbryter steg."
+        }
+
+
+    }
+    catch {
+        Add-Log "FEL: $($_.Exception.Message)"
+        if ($_.Exception.InnerException) {
+            Add-Log "INNER: $($_.Exception.InnerException.Message)"
+        }
+        throw  # bibehåll samma felbeteende
+    }
+    finally {
+        Add-Log "IssueCert-process avslutad"
+    }
+
+}
+
+if ($InstallPfx) {
+
+    Add-Log "Startar InstallPfx-process"
+    step "Bygger webport.p12"
+    Add-Log "Initierar byggandet av webport.p12"
+
+    try {
+
+        $openssl = Test-OpenSSL
+        if (-not $openssl) {
+            Add-Log "FEL: OpenSSL saknas"
+            throw "OpenSSL saknas – installera först! https://slproweb.com/products/Win32OpenSSL.html"
+        }
+
+        Add-Log "OpenSSL hittades: $openssl"
+
+        $tmp = $env:TEMP
+        $pfxTemp = Join-Path $tmp "webport_temp.pfx"
+        Add-Log "Temporär PFX-sökväg: $pfxTemp"
+
+        # Paths för pem-material
+        $privKeyPath = Join-Path $tmp "privkey.pem"
+        $certPath    = Join-Path $tmp "cert.pem"
+        $chainPath   = Join-Path $tmp "chain.pem"
+
+        Add-Log "PEM paths:"
+        Add-Log "  privKeyPath = $privKeyPath"
+        Add-Log "  certPath    = $certPath"
+        Add-Log "  chainPath   = $chainPath"
+
+        $cert = Get-ChildItem Cert:\LocalMachine\My |
+            Where-Object { $_.Subject -eq "CN=$CN" }
+
+        if ($cert) {
+
+            Add-Log "Cert hittades i LocalMachine\My för CN=$CN"
+            Write-Host "   ✓ Cert hittades i LocalMachine\My → exporterar" -ForegroundColor Green
+
+            Add-Log "Exporterar PFX från certstore"
+            $pfxBytes = $cert.Export(
+                [System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx,
+                $PfxPass
+            )
+
+            [System.IO.File]::WriteAllBytes($pfxTemp, $pfxBytes)
+            Add-Log "Temporär PFX exporterad till $pfxTemp"
+
+            Add-Log "Extraherar cert och key från PFX via OpenSSL"
+
+            & $openssl pkcs12 -in  $pfxTemp -nodes -nokeys  -out $certPath    -password pass:$PfxPass
+            Add-Log "Extraherat cert → $certPath"
+
+            & $openssl pkcs12 -in  $pfxTemp -nodes -nocerts -out $privKeyPath -password pass:$PfxPass
+            Add-Log "Extraherat privat nyckel → $privKeyPath"
+
+            & $openssl pkcs12 -in  $pfxTemp -nodes -nokeys  -out $chainPath   -password pass:$PfxPass
+            Add-Log "Extraherat chain.pem → $chainPath"
+        }
+        else {
+
+            Add-Log "Cert saknas i LocalMachine\My → hämtar certdata från WebPort DB"
+            Write-Host "   ⚠ Cert saknas i LocalMachine\My → hämtar material från DB"
+
+            $Settings   = Read-WebPortSettings
+            $SSLPPK  = $Settings["SSLPPK"]
+            $SSLCAPC = $Settings["SSLCAPC"]
+            $SSLCAIC = $Settings["SSLCAIC"]
+            $SSLCARC = $Settings["SSLCARC"]
+
+            Add-Log "DB-values:"
+            Add-Log "  SSLPPK present: $([bool]$SSLPPK)"
+            Add-Log "  SSLCAPC present: $([bool]$SSLCAPC)"
+            Add-Log "  SSLCAIC present: $([bool]$SSLCAIC)"
+            Add-Log "  SSLCARC present: $([bool]$SSLCARC)"
+
+            if (-not $SSLPPK) {
+                Add-Log "FEL: Ingen privat nyckel hittad i DB"
+                throw "Ingen privat nyckel hittad i DB (SSLPPK)"
+            }
+            if (-not $SSLCAPC) {
+                Add-Log "FEL: SSLCAPC saknas i DB"
+                throw "SSLCAPC (leaf cert) saknas i DB"
+            }
+
+            Add-Log "Skriver PEM-filer från DB-innehåll"
+            Set-Content -Path $privKeyPath -Value $SSLPPK   -Encoding ascii
+            Set-Content -Path $certPath    -Value $SSLCAPC  -Encoding ascii
+
+            # Bygg chain.pem
+            $chainPem = ""
+
+            if ($SSLCAIC) { 
+                $chainPem += $SSLCAIC + "`n"
+                Add-Log "Intermediate cert tillagd"
+            }
+            if ($SSLCARC) { 
+                $chainPem += $SSLCARC + "`n"
+                Add-Log "Root cert tillagd"
+            }
+
+            if ($chainPem -ne "") {
+                Set-Content -Path $chainPath -Value $chainPem -Encoding ascii
+                Add-Log "chain.pem skapad"
+            }
+            else {
+                Write-Warning "   Ingen intermediate/root certkedja hittad i DB"
+                Add-Log "Ingen intermediate/root certkedja hittad, skapar tom chain.pem"
+                Set-Content -Path $chainPath -Value "" -Encoding ascii
+            }
+        }
+
+        Add-Log "Kör OpenSSL export → webport.p12"
+
+        & $openssl pkcs12 -export `
+            -inkey    $privKeyPath `
+            -in       $certPath `
+            -certfile $chainPath `
+            -out      "$WebPortDataPath\webport.p12" `
+            -password pass:$PfxPass
+
+        Add-Log "webport.p12 skapad → $WebPortDataPath\webport.p12"
+        ok "P12 skapad → $WebPortDataPath\webport.p12"
+        step "Installerar cert i LocalMachine\My"
+        Add-Log "Installerar certifikat i LocalMachine\My"
+        certutil -f -p $script:PfxPass -ImportPfx "$WebPortDataPath\webport.p12"
+        Add-Log "certutil ImportPfx slutförd"
+        Restart-WebPort
+        Add-Log "WebPort restartad efter cert-installation"
+        ok "Cert installerat"
+        Add-Log "InstallPfx-process avslutad OK"
+
+    }
+    catch {
+        Add-Log "FEL i InstallPfx: $($_.Exception.Message)"
+        if ($_.Exception.InnerException) {
+            Add-Log "INNER: $($_.Exception.InnerException.Message)"
+        }
+        throw
+    }
+
+}
+
+if ($Sendmail){
+    step "Analysera och skicka log vid fel"
+    $Settings = Read-WebPortSettings
+    $SSLCN    = $Settings["SSLCN"]
+    $DoSendMail = ($($IssueCertLog.ToString()) -match '(?i)(exception|error|fail|failed|timeout|denied|missing|not found|unable|could not|invalid)') 
+
+    if ($DoSendMail) {
+        step "Skickar mail till $Sendmail"
+        Add-Log "Problem upptäckta i loggen → skickar mail"
+        err "Problem upptäckta i loggen → skickar mail"
+        $global:IssueCertLog = $IssueCertLog 
+        Send-WebPortMail -To $Sendmail -Subject "$SSLCN - Problem med att förnya certifikat" -Body $IssueCertLog.ToString()
+        OK "Mail skickat till $Sendmail"
+    }
+    else {
+        Add-Log "Inga problem upptäckta i loggen → mail skickas"
+        Send-WebPortMail -To $Sendmail -Subject "$SSLCN - Förnyat certifikat" -Body $IssueCertLog.ToString()
+        ok "Inga problem upptäckta i loggen → mail skickas"
+    }
+}
+
+Write-Host "`n✓ KLART" -ForegroundColor Green
