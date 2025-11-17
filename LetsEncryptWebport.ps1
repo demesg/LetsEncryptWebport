@@ -5,6 +5,25 @@ Automates SSL certificate management for Kiona WebPort using ACME/Let’s Encryp
 .DESCRIPTION
 This script performs end-to-end certificate handling for WebPort:
 
+PARAMETERS
+  -failsafe
+      Resets SSL data without ACME. Must NOT be combined with other params.
+
+  -IssueCert
+      Requests/renews certificate via ACME using the existing CSR.
+
+  -InstallPfx
+      Builds webport.p12 and installs certificate into certstore.
+
+  -DnsPlugin
+      DNS plugin used for ACME challenge. Default: "Azure".
+      List available plugins:
+          Get-PAPlugin
+
+.EXAMPLE
+PS> .\LetsEncryptWebport.ps1 -failsafe
+
+.DESCRIPTION
 Normal mode ("Normal" ParameterSet):
   • Reads CSR + CN from WebPort SQLite database
   • Requests certificate via ACME (e.g. Let’s Encrypt) based on existing CSR
@@ -24,6 +43,18 @@ Failsafe mode ("FailSafe" ParameterSet):
   • Must NOT be combined with PfxPass
   • Performs NO ACME actions
 
+If the -Sendmail parameter is provided, the script will automatically
+analyze the renewal log ($IssueCertLog) and determine whether the
+operation encountered errors, warnings, or failure indicators.
+This allows an administrator to always receive a status message,
+and immediately detect if something went wrong during ACME certificate
+issuance, P12 export, or WebPort restart.
+Requires SMTP settings to be correctly configured inside the WebPort
+settings database:
+    smtpserver, smtpport, smtpssl, smtpencoding,
+    smtpfrom, smtpuser. 
+    smtppassword is stored in secretstore as SmtpPwd.
+
 SecretStore is used to store the script’s sensitive parameters.
   1. The SecretStore modules are installed (SecretManagement + SecretStore)
   2. A vault is registered and set as the default
@@ -35,24 +66,11 @@ SecretStore is used to store the script’s sensitive parameters.
     • PfxPass – password for the WebPort .p12 file
     • SmtpPwd – password for the SMTP account
 
+
 .EXAMPLE
 # Adding DNS plugin arguments to SecretStore:
-$pArgs = @{
-    AZSubscriptionId = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-    AZTenantId       = "yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy"
-    AZAppUsername    = "zzzzzzzz-zzzz-zzzz-zzzz-zzzzzzzzzzzz"
-    AZCertThumbprint = "ABCDEF1234567890ABCDEF1234567890ABCDEF12"
-    AZResourceGroup  = "DNS"
-    AZZoneName       = "example.com"
-}
 Set-Secret -Name PluginArgs -Secret $pArgs
-
-.EXAMPLE
-# Adding the password for the WebPort PFX:
 Set-Secret -Name PfxPass -Secret "MyStrongPassword"
-
-.EXAMPLE
-# Adding the SMTP password:
 Set-Secret -Name SmtpPwd -Secret "S3cur3!"
 
 .EXAMPLE
@@ -74,13 +92,12 @@ Remove-Item "$env:LOCALAPPDATA\Microsoft\PowerShell\secretmanagement\secretstore
 
 
 DNS PLUGIN SUPPORT
-The script supports any DNS plugin via Posh-ACME:
+https://poshac.me/
 
-    -DnsPlugin "Azure"
-    -DnsPlugin "Cloudflare"
-    -DnsPlugin "Route53"
-    -DnsPlugin "AcmeDns"
-    …
+Plugin guide:
+    Get-PAPlugin -Plugin Azure      -Guide
+    Get-PAPlugin -Plugin Cloudflare -Guide
+    Get-PAPlugin -Plugin AcmeDns    -Guide
 
 Plugin-specific arguments can be provided via:
 
@@ -114,55 +131,13 @@ NOTES
   • Default DNS plugin: Azure, but user may change via -DnsPlugin
   • Only InstallPfx installs the certificate into certstore
 
-PARAMETERS
-  -failsafe
-      Resets SSL data without ACME. Must NOT be combined with other params.
-
-  -IssueCert
-      Requests/renews certificate via ACME using the existing CSR.
-
-  -InstallPfx
-      Builds webport.p12 and installs certificate into certstore.
-
-  -DnsPlugin
-      DNS plugin used for ACME challenge. Default: "Azure".
-      List available plugins:
-          Get-PAPlugin
-
-  -PluginArgs
-      HashTable with plugin-specific parameters.
-      Example:
-          -PluginArgs @{ CFToken = "xxxxx" }
-
-  -PfxPass
-      Password for the .p12 archive. Mandatory in Normal mode.
-
-  -ZoneName
-      DNS zone used by some plugins (e.g. Azure).
-
-  -ResourceGroup
-      DNS resource group, used by Azure.
-
-.EXAMPLE
-PS> .\LetsEncryptWebport.ps1 -IssueCert -InstallPfx -PfxPass "secret"
-
-.EXAMPLE
-PS> .\LetsEncryptWebport.ps1 -IssueCert -DnsPlugin "Cloudflare" `
-       -PluginArgs @{ CFToken = "xxxx" } `
-       -PfxPass "password"
-
-.EXAMPLE
-PS> Get-PAPlugin -Plugin Azure -Guide
-
-.EXAMPLE
-PS> .\LetsEncryptWebport.ps1 -failsafe
 
 .AUTHOR
     Original Author:  Magnus Ardström  
 
 .REVISION
-    Version:          1.0.0
-    Last Updated:     2025-11-09
+    Version:          1.2.0
+    Last Updated:     2025-11-17
 #>
 
 
@@ -203,11 +178,6 @@ param(
     [Parameter(ParameterSetName="FailSafe")]
     [Parameter(ParameterSetName="CreateScheduledTask")]
     [string]$DnsPlugin,
-
-    [Parameter(ParameterSetName="Normal")]
-    [Parameter(ParameterSetName="FailSafe")]
-    [Parameter(ParameterSetName="CreateScheduledTask")]
-    [string]$PluginArgsFile,
 
     [Parameter(ParameterSetName="Normal")]
     [Parameter(ParameterSetName="FailSafe")]
@@ -759,6 +729,24 @@ function Ensure-PoshAcme {
     }
 }
 
+function Ensure-AzModule {
+    if (-not (Get-Module -ListAvailable -Name Az.Accounts)) {
+        Write-Host "   ⚠ Installing Az.Accounts …" -ForegroundColor Yellow
+        Install-Module Az.Accounts -Force -Scope AllUsers
+    }
+
+    # Optional but recommended if access token fails
+    if (-not (Get-Module -ListAvailable -Name Az.Resources)) {
+        Write-Host "   ⚠ Installing Az.Resources …" -ForegroundColor Yellow
+        Install-Module Az.Resources -Force -Scope AllUsers
+    }
+
+    Import-Module Az.Accounts  -ErrorAction Stop
+    Import-Module Az.Resources -ErrorAction SilentlyContinue
+
+    Write-Host "   ✓ Az modules loaded" -ForegroundColor Green
+}
+
 function Send-WebPortMail {
     param(
         [Parameter(Mandatory=$true)] [string]$To,
@@ -779,6 +767,7 @@ function Send-WebPortMail {
     if (-not $smtpFrom)   { throw "SMTP avsändaradress saknas i WebPort DB." }
 
     try {
+        # TODO: ersätt med riktig dekryptering av smtppassword senare:
         $SmtpPwd = ConvertTo-SecureString -String 'vH0z1oix73VfSaLs' -AsPlainText -Force
     }
     catch {
@@ -787,13 +776,30 @@ function Send-WebPortMail {
 
     $credential = New-Object System.Management.Automation.PSCredential($smtpUser, $SmtpPwd)
     Write-Host "smtpUser: $smtpUser to: $To subject: $Subject server: $smtpServer port: $smtpPort ssl: $smtpSsl from: $smtpFrom"
-    # Mail message
+
+    # Bygg mailmeddelande
     $msg = New-Object System.Net.Mail.MailMessage
     $msg.From = $smtpFrom
-    $msg.To.Add($To)
     $msg.Subject = $Subject
     $msg.Body = $Body
 
+    # 🟩 SPLITTA MOTTAGARE VID ';'
+    $recipients = $To -split ";" | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
+
+    if ($recipients.Count -eq 0) {
+        throw "Inga giltiga mottagare i TO-parametern."
+    }
+
+    foreach ($rcpt in $recipients) {
+        try {
+            $null = $msg.To.Add($rcpt)
+        }
+        catch {
+            Write-Warning "Ogiltig e-postadress ignoreras: $rcpt"
+        }
+    }
+
+    # Body encoding
     try {
         if ($smtpEncoding) {
             $msg.BodyEncoding = [System.Text.Encoding]::GetEncoding($smtpEncoding)
@@ -807,15 +813,15 @@ function Send-WebPortMail {
         $msg.BodyEncoding = [System.Text.Encoding]::UTF8
     }
 
-    # SMTP client
+    # SMTP-klient
     $smtp = New-Object System.Net.Mail.SmtpClient($smtpServer, $smtpPort)
     $smtp.EnableSsl = $smtpSsl
     $smtp.Credentials = $credential
-    $smtp.Timeout = 15000   # 15 sek timeout
+    $smtp.Timeout = 15000   # 15 sek
 
     try {
         $smtp.Send($msg)
-        Write-Host "✓ Mail skickat till $To" -ForegroundColor Green
+        Write-Host "✓ Mail skickat till: $($recipients -join ', ')" -ForegroundColor Green
         return $true
     }
     catch {
@@ -828,46 +834,10 @@ function Send-WebPortMail {
     }
 }
 
+
 function Add-Log {
-    param(
-        [string]$Text,
-        [ValidateSet("Information","Warning","Error")]
-        [string]$Level = "Information"
-    )
-
-    # 1) Intern logg (StringBuilder)
-    $IssueCertLog.AppendLine("[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] $Level : $Text") | Out-Null
-
-    # 2) EventLog Setup
-    $logName = "Application"
-    $source  = "WebPort-LetsEncrypt"
-
-    if (-not [System.Diagnostics.EventLog]::SourceExists($source)) {
-        try {
-            New-EventLog -LogName $logName -Source $source
-        }
-        catch {
-            # Om scriptet körs utan admin första gången kan detta misslyckas
-            # Vi loggar då bara internt
-            $IssueCertLog.AppendLine("WARNING: EventLog source could not be created: $($_.Exception.Message)") | Out-Null
-            return
-        }
-    }
-
-    # 3) Mappa Level till EventLog-type
-    switch ($Level) {
-        "Information" { $entryType = [System.Diagnostics.EventLogEntryType]::Information }
-        "Warning"     { $entryType = [System.Diagnostics.EventLogEntryType]::Warning }
-        "Error"       { $entryType = [System.Diagnostics.EventLogEntryType]::Error }
-    }
-
-    # 4) Skriv loggpost
-    try {
-        Write-EventLog -LogName $logName -Source $source -EntryType $entryType -EventId 1000 -Message $Text
-    }
-    catch {
-        $IssueCertLog.AppendLine("ERROR: Failed to write to EventLog: $($_.Exception.Message)") | Out-Null
-    }
+    param([string]$Text)
+    $IssueCertLog.AppendLine("[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] $Text") | Out-Null
 }
 
 $ScriptRoot = Split-Path -Parent $PSCommandPath
@@ -880,31 +850,36 @@ if ($UseSecretStore -and !$failsafe) {
 
     Write-Host "==> SecretStore" -ForegroundColor Cyan
 
-    # Säkerställ modul
+    # Säkerställ moduler
+    if (-not (Get-Module -ListAvailable -Name Microsoft.PowerShell.SecretManagement)) {
+        Install-Module Microsoft.PowerShell.SecretManagement -Force -Scope AllUsers
+    }
     if (-not (Get-Module -ListAvailable -Name Microsoft.PowerShell.SecretStore)) {
-        Write-Host "   ⚠ SecretStore modul saknas → installerar…" -ForegroundColor Yellow
         Install-Module Microsoft.PowerShell.SecretStore -Force -Scope AllUsers
     }
 
-    Import-Module Microsoft.PowerShell.SecretStore -ErrorAction Stop
-    Write-Host "   ✓ SecretStore laddad" -ForegroundColor Green
+    Import-Module Microsoft.PowerShell.SecretManagement
+    Import-Module Microsoft.PowerShell.SecretStore
 
-    # Kontrollera om SecretStore är initierad
-    $storeInfo = Get-SecretStoreConfiguration -ErrorAction SilentlyContinue
+    # Registrera SecretStore som default vault
+    if (-not (Get-SecretVault | Where-Object { $_.Name -eq "SecretStore" })) {
+        Register-SecretVault `
+            -Name SecretStore `
+            -ModuleName Microsoft.PowerShell.SecretStore `
+            -DefaultVault `
+            -ErrorAction Stop
 
-    if (-not $storeInfo) {
-        Write-Host "   ⚠ SecretStore inte initierad → initierar…" -ForegroundColor Yellow
-
-        Set-SecretStoreConfiguration `
-            -Scope AllUsers `
-            -Authentication Password `
-            -Confirm:$false
-
-        Initialize-SecretStore `
-            -Password (Read-Host "Ange nytt SecretStore-lösenord" -AsSecureString)
-
-        Write-Host "   ✓ SecretStore initierad" -ForegroundColor Green
+        Write-Host "✓ SecretStore registrerad som default vault" -ForegroundColor Green
     }
+    else {
+        # Om redan registrerad men inte default: sätt den som default
+        $vault = Get-SecretVault | Where-Object { $_.Name -eq "SecretStore" }
+        if (-not $vault.IsDefault) {
+            Set-DefaultSecretVault -Name SecretStore
+            Write-Host "✓ SecretStore satt som default vault" -ForegroundColor Green
+        }
+    }
+
 
     # Kontrollera lösenordsfil
     if (-not (Test-Path $SecurePasswordPath)) {
@@ -969,7 +944,36 @@ När PluginArgs är korrekt inlagda i SecretStore, kör scriptet igen.
         throw "Secret 'SmtpPwd' saknas i SecretStore. Lägg till med: Set-Secret -Name SmtpPwd -Secret 'hemligt'"
     }
 }
+$EnableLogging = $true
+if ($EnableLogging -and !$failsafe) {
 
+    # Hämta scriptets mapp och namn
+    $ScriptRoot = Split-Path -Parent $PSCommandPath
+    $ScriptName = [IO.Path]::GetFileNameWithoutExtension($PSCommandPath)
+
+    # Loggmapp per script:  <ScriptRoot>\<ScriptName>-logs\
+    $LogFolder = Join-Path $ScriptRoot "$ScriptName-logs"
+
+    # Skapa mapp om den saknas
+    if (-not (Test-Path $LogFolder)) {
+        New-Item -Path $LogFolder -ItemType Directory | Out-Null
+    }
+
+    # Rensa loggfiler äldre än 100 dagar
+    Get-ChildItem -Path $LogFolder -File |
+        Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-100) } |
+        Remove-Item -Force -ErrorAction SilentlyContinue
+
+    # Loggfilens namn: Scriptname-YYYYMMDD-HHMMSS.txt
+    $Timestamp = (Get-Date -Format "yyyyMMdd-HHmmss")
+    $TranscriptFile = Join-Path $LogFolder "$ScriptName-$Timestamp.txt"
+
+    # Starta transcript
+    Start-Transcript -Path $TranscriptFile -Append | Out-Null
+
+    Write-Host "📄 Loggning startad → $TranscriptFile" -ForegroundColor Cyan
+
+}
 # Kontroll: PowerShell version
 $minPS = [Version]"7.0.0"
 if ($PSVersionTable.PSVersion -lt $minPS) {
@@ -1116,50 +1120,59 @@ if ($failsafe){
 if ($CreateScheduledTask) {
 
     step "Skapar schemalagd uppgift för automatisering"
+    $taskName = "WebPort LetsEncrypt Renewal"
+    $ScriptPath = $PSCommandPath
+    $ScriptDir  = Split-Path -Parent $ScriptPath
 
-    # Hitta PowerShell 7
+    # Ensure PowerShell 7 exists
     $pwsh = Get-Command "pwsh.exe" -ErrorAction SilentlyContinue
     if (-not $pwsh) {
         throw "PowerShell 7 (pwsh.exe) not found. Install from: https://learn.microsoft.com/powershell/"
     }
 
-    # Scriptets fulla sökväg
-    $ScriptPath = $PSCommandPath
+    #
+    # Build arguments the same way the script was invoked
+    #
+    $argsList = @(
+        '-NoLogo',
+        '-NoProfile',
+        '-File', "`"$ScriptPath`"",
+        '-IssueCert',
+        '-InstallPfx',
+        "-DnsPlugin `"$DnsPlugin`"",
+        "-ServerPort `"$ServerPort`"",
+        "-WebPortDataPath `"$WebPortDataPath`"",
+        "-WebPortProgPath `"$WebPortProgPath`"",
+        "-Sendmail `"$Sendmail`""
+    )
 
-    # Lista för uppbyggning av argument
-    $argsList = @()
-
-    # === FIXA obligatoriska parametrar ===
-    $argsList += "-IssueCert"
-    $argsList += "-InstallPfx"
-
-    # === Dynamiska parametrar hämtas från scriptets körning ===
-
-    # Strängparametrar
-    if ($DnsPlugin)       { $argsList += "-DnsPlugin `"$DnsPlugin`"" }
-    if ($WebPortDataPath) { $argsList += "-WebPortDataPath `"$WebPortDataPath`"" }
-    if ($WebPortProgPath) { $argsList += "-WebPortProgPath `"$WebPortProgPath`"" }
-    if ($Sendmail)        { $argsList += "-Sendmail `"$Sendmail`"" }
-
-    # Bygg argumentsträngen för scheduled task
-    $finalArgs = "-NoLogo -NoProfile -File `"$ScriptPath`" $($argsList -join ' ')"
-
-    Write-Host "   Kommandorad för scheduled task:"
-    Write-Host "   pwsh.exe $finalArgs" -ForegroundColor Yellow
+    $argumentString = $argsList -join " "
 
     # Scheduled Task action
-    $action = New-ScheduledTaskAction -Execute $pwsh.Source -Argument $argumentString
+    $action = New-ScheduledTaskAction -Execute $pwsh.Source -Argument $argumentString -WorkingDirectory $ScriptDir
+
+    # Weekly at 02:00
     $trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Sunday -At 2:00am
-    $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -RunLevel Highest
+
+    # Hämta nuvarande användare
+    $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+
+    # Skapa principal som current user, med S4U-logintyp (kräver ej lösenord)
+    $principal = New-ScheduledTaskPrincipal `
+        -UserId $currentUser `
+        -RunLevel Highest `
+        -LogonType S4U
+
     $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
+
+    # Create task
     $task = New-ScheduledTask -Action $action -Trigger $trigger -Principal $principal -Settings $settings
 
     Register-ScheduledTask -TaskName $taskName -InputObject $task -Force
-    ok "Schemalagd uppgift '$taskName' skapad. Körs varje söndag kl 02:00 via PowerShell 7."
-    # wevtutil set-log Microsoft-Windows-TaskScheduler/Operational /e:true
-    return
-}
 
+    ok "Schemalagd uppgift skapad: $taskName "
+    break
+}
 
 if ($IssueCert) {
 
@@ -1170,56 +1183,32 @@ if ($IssueCert) {
     $SSLCN = $Settings["SSLCN"]
 
     try {
-        if ($DnsPlugin -eq "Azure") {
-            Add-Log "DnsPlugin = Azure"
 
-            $ctx = Get-AzContext
-            if (-not $ctx) { Add-Log "Get-AzContext returnerade null"; throw "Ingen Azure-context" }
-
-            $token = (Get-AzAccessToken -ResourceUrl "https://management.azure.com/").Token | ConvertFrom-SecureString -AsPlainText
-
-            Add-Log "Azure-token genererad"
-
-            $PluginArgs = @{
-                AZSubscriptionId = $ctx.Subscription.Id
-                AZAccessToken    = $token
-                AZResourceGroup  = $ResourceGroup
-                AZZoneName       = $ZoneName
-            }
-
-            Add-Log "PluginArgs: **********"
-        }
-        elseif ($PluginArgsFile) {
-
-            step "Läser PluginArgs från fil"
-            Add-Log "Läser PluginArgsFile: $PluginArgsFile"
-
-            $PluginArgs = Read-PluginArgsFile -Path $PluginArgsFile
-
-            Add-Log "PluginArgs lästa: **********"
-            ok "PluginArgs lästa"
-        }
-        else {
-            $PluginArgs = Get-Secret -Name PluginArgs -AsPlainText | ConvertTo-Json
-            $PfxPass = Get-Secret -Name PfxPass    -AsPlainText
-            $SmtpPwd = Get-Secret -Name SmtpPwd    -AsPlainText
-        }
-            Add-Log "Cert finns: $($cert.Thumbprint), giltigt till: $($cert.NotAfter), dagar kvar: $daysLeft"
+        
+        $PluginArgs = Get-Secret -Name PluginArgs -AsPlainText 
+        $PfxPass = Get-Secret -Name PfxPass    -AsPlainText
+        $SmtpPwd = Get-Secret -Name SmtpPwd    -AsPlainText
+        
 
         if (($PluginArgs) -and ($PfxPass) -and ($SmtpPwd)) {
 
             $cert = Get-ChildItem Cert:\LocalMachine\My | Where-Object { $_.Subject -like "CN=$SSLCN" }
             $daysLeft = ($cert.NotAfter - (Get-Date)).Days
-            
+            Add-Log "Cert finns: $($cert.Thumbprint), giltigt till: $($cert.NotAfter), dagar kvar: $daysLeft"
+
             if ($daysLeft -lt 30 -or -not $cert) { 
 
                 Add-Log "Förnyar cert via ACME (CSR mode)"
-                pause
+                
                 New-PACertificate `
                     -CSR $csrFile `
                     -DnsPlugin $DnsPlugin `
                     -PluginArgs $PluginArgs `
-                    -Verbose
+                    -acceptTOS `
+                    -Verbose `
+                    -debug
+
+                #Error parsing certificate request: asn1: syntax error: sequence truncated
 
                 Add-Log "New-PACertificate körd OK"
 
@@ -1266,6 +1255,7 @@ if ($IssueCert) {
             else {
                 Add-Log "Cert finns: $($cert.Thumbprint), giltigt till: $($cert.NotAfter), dagar kvar: $daysLeft" -Level Information
                 Write-Host "   ✓ Cert finns och är giltigt i $daysLeft dagar → ingen förnyelse behövs" -ForegroundColor Green
+                Stop-Transcript
                 break
             }
             
@@ -1453,3 +1443,6 @@ if ($Sendmail){
 }
 
 Write-Host "`n✓ KLART" -ForegroundColor Green
+Stop-Transcript
+Write-Host "📄 Loggning stopppad → $TranscriptFile" -ForegroundColor Cyan
+
