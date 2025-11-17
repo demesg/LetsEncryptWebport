@@ -161,8 +161,8 @@ PS> .\LetsEncryptWebport.ps1 -failsafe
     Original Author:  Magnus Ardström  
 
 .REVISION
-    Version:          1.1.0
-    Last Updated:     2025-11-17
+    Version:          1.0.0
+    Last Updated:     2025-11-09
 #>
 
 
@@ -876,7 +876,7 @@ $SecurePasswordPath = Join-Path $ScriptRoot "securePassword.xml"
 
 $IssueCertLog = New-Object System.Text.StringBuilder
 $UseSecretStore = $true
-if ($UseSecretStore) {
+if ($UseSecretStore -and !$failsafe) {
 
     Write-Host "==> SecretStore" -ForegroundColor Cyan
 
