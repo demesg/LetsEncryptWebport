@@ -865,22 +865,11 @@ Du måste skapa PluginArgs baserat på DNS-pluginet du använder.
 Följ plugin-guiden för ditt DNS-system:
     https://poshac.me/docs/v4/Plugins/
 
-För Azure (certifikatbaserad autentisering – rekommenderad modell):
--------------------------------------------------------------
-$($([char]36))pArgs = @{
-    AZSubscriptionId   = 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'
-    AZAccessToken      = 'ey.........'
-    AZResourceGroup    = 'Resourcegroup name'
-    AZZoneName         = 'example.com'
-}
-
-Spara PluginArgs i SecretStore:
+Spara pArgs i SecretStore:
 -------------------------------------------------------------
 Set-Secret -Name PluginArgs -Secret `$pArgs
 
-Kontrollera plugin-guiden för andra leverantörer och deras nödvändiga fält.
-
-När PluginArgs är korrekt inlagda i SecretStore, kör scriptet igen.
+När pArgs är korrekt inlagda i SecretStore, kör scriptet igen.
 "@
           throw "Secret 'PluginArgs' saknas i SecretStore. Skapa och lägg till enligt instruktioner ovan."        
     }
@@ -1402,5 +1391,6 @@ if ($Sendmail){
 Write-Host "`n✓ KLART" -ForegroundColor Green
 Stop-Transcript
 Write-Host "📄 Loggning stopppad → $TranscriptFile" -ForegroundColor Cyan
+
 
 
