@@ -3,69 +3,83 @@
 Automates SSL certificate management for Kiona WebPort using ACME/Let’s Encrypt.
 
 .DESCRIPTION
-This script performs end-to-end certificate handling for WebPort:
+This script performs complete end-to-end certificate handling for WebPort,
+including CSR-based ACME issuance, certificate chain updates in the WebPort
+SQLite database, PFX generation, keystore installation, firewall adjustments,
+and optional email reporting.
 
 PARAMETERS
   -failsafe
-      Resets SSL data without ACME. Must NOT be combined with other params.
+      Resets all SSL-related data without performing any ACME operations.
+      Must NOT be combined with any other functional parameters.
 
   -IssueCert
-      Requests/renews certificate via ACME using the existing CSR.
+      Performs ACME certificate issuance or renewal using the CSR stored in the
+      WebPort database. Uses the selected Posh-ACME DNS plugin.
 
   -InstallPfx
-      Builds webport.p12 and installs certificate into certstore.
+      Builds the WebPort-compatible webport.p12 file and installs the resulting
+      certificate into the LocalMachine\My certificate store.
 
   -DnsPlugin
-      DNS plugin used for ACME challenge. Default: "Azure".
-      List available plugins:
-          Get-PAPlugin
+      Specifies the DNS plugin used for ACME DNS-01 validation.
+      Default plugin is "Azure".  
+      List available plugins: Get-PAPlugin
 
-.EXAMPLE
-PS> .\LetsEncryptWebport.ps1 -failsafe
+  -Sendmail
+      If provided, the script will analyze the runtime log and email either a
+      “success” or “problem detected” report to the provided recipient(s).
 
-.DESCRIPTION
-Normal mode ("Normal" ParameterSet):
-  • Reads CSR + CN from WebPort SQLite database
-  • Requests certificate via ACME (e.g. Let’s Encrypt) based on existing CSR
-  • Uses any Posh-ACME DNS plugin (default: Azure)
-  • Updates certificate chain (leaf / intermediate / root) in WebPort database
-  • Builds WebPort-compatible P12 file
-  • Installs certificate into LocalMachine\My (performed in InstallPfx step)
-  • Ensures firewall port is enabled
-  • Requires PfxPass in Normal mode
+  -CreateScheduledTask
+      Creates a Windows Scheduled Task using PowerShell 7 that runs the script
+      with the same effective parameters and working directory.
 
-Failsafe mode ("FailSafe" ParameterSet):
-  • Resets SSL-related database fields:
+.NORMAL MODE
+  • Reads CSR and CN from the WebPort SQLite database
+  • Issues or renews certificates via ACME using the stored CSR
+  • Supports any Posh-ACME DNS plugin
+  • Updates leaf/intermediate/root certificates inside WebPort DB
+  • Builds a WebPort-compatible P12 file
+  • Installs certificate into LocalMachine\My (via InstallPfx)
+  • Ensures firewall rules match the current ServerPort
+  • Requires PfxPass from SecretStore
+
+.FAILSAFE MODE
+  • Clears SSL-related fields:
         SSLCSR, SSLPPK, SSLCAPC, SSLCAIC, SSLCARC, SSLCP
-  • Removes `webport.p12`
-  • Removes matching certificates from certstore
+  • Removes webport.p12
+  • Deletes matching certificates from the certificate store
   • Restarts WebPort
+  • Performs NO ACME operations
   • Must NOT be combined with PfxPass
-  • Performs NO ACME actions
 
-If the -Sendmail parameter is provided, the script will automatically
-analyze the renewal log ($IssueCertLog) and determine whether the
-operation encountered errors, warnings, or failure indicators.
-This allows an administrator to always receive a status message,
-and immediately detect if something went wrong during ACME certificate
-issuance, P12 export, or WebPort restart.
-Requires SMTP settings to be correctly configured inside the WebPort
-settings database:
-    smtpserver, smtpport, smtpssl, smtpencoding,
-    smtpfrom, smtpuser. 
-    smtppassword is stored in secretstore as SmtpPwd.
+.EMAIL REPORTING
+If -Sendmail is supplied, the script scans the IssueCert runtime log for
+strings indicating failure (exception, error, fail, timeout, denied, invalid,
+etc.):
 
-SecretStore is used to store the script’s sensitive parameters.
-  1. The SecretStore modules are installed (SecretManagement + SecretStore)
-  2. A vault is registered and set as the default
-  3. The SecretStore is initialized if it does not already exist
-  4. The unlock password is stored in an XML file (e.g., securePassword.xml)
-  5. SecretStore is automatically unlocked during script execution
-  6. Secrets are read from the vault:
-    • PluginArgs – DNS plugin parameters for ACME/Posh-ACME
-    • PfxPass – password for the WebPort .p12 file
-    • SmtpPwd – password for the SMTP account
+  • If issues are detected:
+        Sends an email titled "<CN> - Problem renewing certificate"
 
+  • If no issues are detected:
+        Sends an email titled "<CN> - Certificate renewed"
+
+SMTP settings must exist in the WebPort database:
+    smtpserver, smtpport, smtpssl, smtpencoding, smtpfrom, smtpuser  
+    The password (smtppassword) is retrieved from SecretStore as SmtpPwd.
+
+.SECRETSTORE USAGE
+SecretStore is used to securely store sensitive script parameters:
+
+  1. SecretManagement and SecretStore modules are ensured
+  2. SecretStore is registered and set as default vault
+  3. SecretStore is initialized if missing
+  4. The unlock password is stored in securePassword.xml
+  5. The vault is automatically unlocked during execution
+  6. Secrets retrieved:
+        • PluginArgs – DNS plugin configuration
+        • PfxPass    – WebPort P12 password
+        • SmtpPwd    – SMTP account password
 
 .EXAMPLE
 # Adding DNS plugin arguments to SecretStore:
@@ -74,7 +88,7 @@ Set-Secret -Name PfxPass -Secret "MyStrongPassword"
 Set-Secret -Name SmtpPwd -Secret "S3cur3!"
 
 .EXAMPLE
-# Listing all secrets stored in SecretStore:
+# Listing secrets:
 Get-SecretInfo
 
 .EXAMPLE
@@ -86,58 +100,38 @@ Get-Secret -Name PluginArgs -AsPlainText
 Remove-Secret -Name PluginArgs
 
 .EXAMPLE
-# Resetting the entire SecretStore vault:
+# Resetting the SecretStore vault:
 Unregister-SecretVault -Name SecretStore
 Remove-Item "$env:LOCALAPPDATA\Microsoft\PowerShell\secretmanagement\secretstore" -Recurse -Force
 
-
-DNS PLUGIN SUPPORT
-https://poshac.me/
-
-Plugin guide:
+.DNS PLUGIN SUPPORT
+All Posh-ACME plugins are supported.  
+Display plugin documentation:
     Get-PAPlugin -Plugin Azure      -Guide
     Get-PAPlugin -Plugin Cloudflare -Guide
     Get-PAPlugin -Plugin AcmeDns    -Guide
 
-Plugin-specific arguments can be provided via:
+.ACME PROCESS
+  • The CSR is generated by WebPort GUI
+  • The script performs DNS-01 ACME validation
+  • Leaf/intermediate/root certificates are written into the WebPort DB
+  • Private key is taken from the certstore or DB (fallback scenario)
 
-    -PluginArgs @{ Key = "Value"; … }
-
-Example for Azure (auto-population is also supported):
-    $pluginArgs = @{
-        AZSubscriptionId = "xxxx"
-        AZAccessToken    = "xxxx"
-        AZResourceGroup  = "DNS"
-        AZZoneName       = "domain.tld"
-    }
-
-Plugin guide:
-    Get-PAPlugin -Plugin Azure      -Guide
-    Get-PAPlugin -Plugin Cloudflare -Guide
-    Get-PAPlugin -Plugin AcmeDns    -Guide
-
-Each plugin will list which fields are required in PluginArgs.
-
-ACME PROCESS
-  • CSR must first be generated in the WebPort GUI
-  • The script uses the CSR + ACME to obtain a new certificate
-  • Leaf, intermediate, and root certificates are stored in WebPort DB
-  • Private key is retrieved either from certstore or the database (fallback)
-
-NOTES
+.NOTES
   • Requires PowerShell 7+
   • Requires administrative privileges
-  • Initial CSR must be created in WebPort GUI
-  • Default DNS plugin: Azure, but user may change via -DnsPlugin
-  • Only InstallPfx installs the certificate into certstore
-
+  • CSR must be created in WebPort GUI
+  • Default DNS plugin is Azure but can be changed
+  • Only InstallPfx performs certificate installation
 
 .AUTHOR
-    Original Author:  Magnus Ardström  
+    Original Author:  Magnus Ardström
 
 .REVISION
-    Version:          1.2.0
-    Last Updated:     2025-11-17
+    Version:            1.0.0   2025-11-09
+    Version:            1.1.0   2025-11-17
+    Version:            1.1.1   2025-11-18
+       
 #>
 
 
@@ -199,8 +193,8 @@ $banner = @'
 
 Write-Host $banner -ForegroundColor Magenta
 
-[string]$script:SqliteDllPath  = "$WebPortProgPath\System.Data.SQLite.dll"
-[string]$script:WebPortDbPath  = "$WebPortDataPath\db\webport.sqlite"
+[string]$SqliteDllPath  = "$WebPortProgPath\System.Data.SQLite.dll"
+[string]$WebPortDbPath  = "$WebPortDataPath\db\webport.sqlite"
 
 $ErrorActionPreference = "Stop"
 
@@ -274,43 +268,6 @@ function Get-WebPortServerPort {
     }
 
     return [int]$conf.default.ServerPort
-}
-
-function Set-WebPortServerPort {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory=$true)]
-        [string]$WebPortDataPath,
-
-        [Parameter(Mandatory=$true)]
-        [int]$ServerPort
-    )
-
-    $confPath = Join-Path $WebPortDataPath "webport.conf"
-
-    if (-not (Test-Path $confPath)) {
-        throw "webport.conf saknas: $confPath"
-    }
-
-    try {
-        $confRaw = Get-Content $confPath -Raw -ErrorAction Stop
-        $conf    = $confRaw | ConvertFrom-Json -ErrorAction Stop
-    }
-    catch {
-        throw "Kunde inte läsa eller parsa webport.conf → $($_.Exception.Message)"
-    }
-
-    if (-not $conf.default) {
-        throw "Ogiltig konfig: 'default' saknas i webport.conf"
-    }
-
-    # Sätt ny port
-    $conf.default.ServerPort = $ServerPort
-
-    # Skriv tillbaka
-    $conf | ConvertTo-Json -Depth 10 | Set-Content -Path $confPath -Encoding UTF8
-
-    return $ServerPort
 }
 
 function Set-WebPortServerPort {
@@ -1403,7 +1360,7 @@ if ($InstallPfx) {
         ok "P12 skapad → $WebPortDataPath\webport.p12"
         step "Installerar cert i LocalMachine\My"
         Add-Log "Installerar certifikat i LocalMachine\My"
-        certutil -f -p $script:PfxPass -ImportPfx "$WebPortDataPath\webport.p12"
+        certutil -f -p $PfxPass -ImportPfx "$WebPortDataPath\webport.p12"
         Add-Log "certutil ImportPfx slutförd"
         Restart-WebPort
         Add-Log "WebPort restartad efter cert-installation"
@@ -1445,4 +1402,5 @@ if ($Sendmail){
 Write-Host "`n✓ KLART" -ForegroundColor Green
 Stop-Transcript
 Write-Host "📄 Loggning stopppad → $TranscriptFile" -ForegroundColor Cyan
+
 
