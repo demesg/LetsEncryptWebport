@@ -1,257 +1,201 @@
-# WebPort ACME Automation (CSR Mode)
+# WebPort ACME Automation Script
 
-This PowerShell script automates SSL/TLS certificate issuance, renewal, installation, and cleanup for **Kiona WebPort** using **ACME (Let’s Encrypt)**.
-
-It reads CSR and certificate metadata directly from WebPort’s SQLite database, performs certificate requests via ACME, updates certificate fields back into WebPort, optionally installs certificates into the Windows LocalMachine store, and can restart WebPort automatically.
-
-The script supports all Posh-ACME DNS plugins and can use plugin arguments loaded from an external configuration file.
+This script automates SSL certificate issuance, renewal, installation, and maintenance for **Kiona WebPort** using **Let’s Encrypt / ACME** and **Posh-ACME**.
 
 ---
 
-## ✅ Features
+## 📌 Features
 
-- Reads CSR and CN from WebPort DB
-- Generates ACME certificates using Posh-ACME
-- Supports multiple DNS plugins (Azure, Cloudflare, Route53, etc.)
-- Loads DNS plugin arguments from an external file
-- Stores leaf/intermediate/root certs into WebPort DB
-- Builds WebPort-compatible P12 file
-- Installs certificate into LocalMachine\My
-- Removes old certificates from Windows certificate store
-- Ensures Windows firewall allows WebPort traffic
-- Automatically restarts WebPort after installation
-- Failsafe mode resets SSL state
-- Confirms PowerShell 7+
-- Confirms administrative privileges
-- Installs Posh-ACME module if missing
+- CSR‑based ACME certificate issuance  
+- DNS‑01 validation using any Posh-ACME DNS plugin  
+- Automatic certificate chain insertion into WebPort SQLite DB  
+- Creation of WebPort-compatible `webport.p12`  
+- Optional installation of certificate into Windows certstore  
+- Automatic firewall rule management  
+- Built‑in failsafe mode to fully reset SSL state  
+- Scheduled Task creation (PowerShell 7)  
+- E‑mail reporting for both success and failure  
+- Secure SecretStore integration  
 
 ---
 
-## 🧩 Requirements
+## ⚙ Parameter Overview
 
-| Component | Required | Notes |
-|-----------|----------|-------|
-| Windows OS | Yes | |
-| PowerShell 7+ | Yes | Must run via pwsh |
-| Administrator rights | Yes | Required for certificate + firewall |
-| Posh-ACME module | Yes | Auto-installed if missing |
-| OpenSSL | Yes | Required for .p12 file |
-| WebPort installed | Yes | |
+### `-failsafe`
+Resets SSL-related database fields, deletes P12, removes matching certificates, and restarts WebPort.  
+**Cannot be combined with ACME-related parameters.**
 
-Also confirm:
-- `$PSVersionTable.PSVersion` is ≥ 7
-- `openssl` is available
+### `-IssueCert`
+Requests or renews ACME certificates using the CSR stored in WebPort.
 
----
+### `-InstallPfx`
+Builds and installs `webport.p12`.
 
-## 📦 Installation
+### `-DnsPlugin`
+Specifies Posh-ACME DNS plugin (e.g., Azure, Cloudflare, AcmeDNS).
 
-- https://learn.microsoft.com/en-us/powershell/?view=powershell-7.5
-- https://slproweb.com/products/Win32OpenSSL.html (Win64 OpenSSL Light)
+### `-Sendmail`
+Sends a report email after execution (supports multiple recipients via `;`).
 
-Download example:
-```powershell
-curl https://raw.githubusercontent.com/demesg/LetsEncryptWebport/refs/heads/main/LetsEncryptWebport.ps1 -o C:\Temp\LetsEncryptWebport.ps1
-```
+### `-CreateScheduledTask`
+Creates a Scheduled Task with identical parameters and working directory.
 
 ---
 
-## 🔧 Parameters
+## 🔐 SecretStore Usage
 
-| Parameter | Description |
-|-----------|-------------|
-| PfxPass | Password for .p12 bundle (mandatory unless failsafe) |
-| failsafe | Clears SSL config, no ACME |
-| IssueCert | Requests certificate via ACME using CSR |
-| ExportPfx | Builds webport.p12 and installs it |
-| CreateScheduledTask | Creates weekly certificate renewal task |
-| DnsPlugin | Name of Posh-ACME DNS plugin |
-| PluginArgsFile | Path to JSON file containing plugin arguments |
-| ZoneName | DNS zone name |
-| ResourceGroup | Azure resource group (if Azure plugin) |
-| WebPortDataPath | WebPort data directory |
-| WebPortProgPath | WebPort program directory |
+Used to store:
 
----
+- `PluginArgs` – DNS plugin configuration  
+- `PfxPass` – password for the P12 file  
+- `SmtpPwd` – SMTP password  
 
-## 🌐 DNS Plugin Overview
+The script automatically:
 
-When issuing ACME certificates, Let’s Encrypt must verify domain ownership.
-
-If DNS-01 validation is used, a TXT record is created automatically:
-`_acme-challenge.example.com`
-
-Posh-ACME DNS plugins:
-- Handle provider-specific APIs
-- Create & remove TXT records
-- Enable automatic, unattended renewals
-
-Example DNS providers:
-- Azure
-- Cloudflare
-- AWS Route53
-- Google
-- AcmeDns
-- Hetzner
-- TransIP
-- And many more
-
-To list available plugins:
-Get-PAPlugin
-
-To view specific plugin details:
-Get-PAPlugin -Plugin Azure -Guide
-
-Documentation:
-https://poshac.me/docs/v4/Plugins/
-
----
-
-## 📄 What is PluginArgsFile?
-
-PluginArgsFile is a text file (JSON format recommended) that stores DNS provider configuration used by Posh-ACME to perform DNS-01 validation.
-
-It holds sensitive values such as:
-- Subscription IDs
-- API tokens
-- Resource Group
-- DNS zone information
-
-Advantages:
-- Keeps secrets out of command arguments
-- Avoids exposure in PowerShell history
-- Easy to rotate credentials
-- Allows changing DNS provider without script change
-- More automation-friendly
-
-Example JSON structure:
-{
-  "AZSubscriptionId": "xxxxx",
-  "AZAccessToken": "xxxxx",
-  "AZResourceGroup": "DNS",
-  "AZZoneName": "example.com"
-}
-
-Usage example:
-```powershell
-.\LetsEncryptWebport.ps1 -IssueCert -DnsPlugin Azure -PluginArgsFile C:\secure\plugin.json -PfxPass "secret"
-```
----
-
-## 🏗 Usage Examples
-
-Request certificate and build P12:
-```powershell
-.\LetsEncryptWebport.ps1 -IssueCert -ExportPfx -DnsPlugin Azure -PluginArgsFile C:\secure\plugin.json -PfxPass "secret"
-```
-Use Cloudflare:
-```powershell
-.\LetsEncryptWebport.ps1 -IssueCert -DnsPlugin Cloudflare -PluginArgsFile C:\secure\cf.json -PfxPass "secret"
-```
-Failsafe cleanup:
-```powershell
-.\LetsEncryptWebport.ps1 -failsafe
-```
-Create weekly task:
-```powershell
-.\LetsEncryptWebport.ps1 -CreateScheduledTask
-```
----
-
-## 🔍 WebPort Database Fields
-
-The script reads and/or updates these WebPort DB keys:
-
-| Key | Description |
-|-----|-------------|
-| SSLCN | Common Name + SAN list |
-| SSLCSR | CSR data |
-| SSLPPK | Private key |
-| SSLCAPC | Leaf certificate |
-| SSLCAIC | Intermediate certificate |
-| SSLCARC | Root certificate |
-| SSLCP | CSR password |
-
----
-
-## 🧨 Failsafe Mode
-
-Failsafe mode resets SSL configuration safely when certificate/DB state is corrupted.
-
-Actions performed:
-
-- Clears SSL DB keys:
-  SSLCSR  
-  SSLPPK  
-  SSLCAPC  
-  SSLCAIC  
-  SSLCARC  
-  SSLCP  
-
-- Removes webport.p12
-- Removes matching certificates from LocalMachine\My
-- Restarts WebPort
-
-No ACME requests occur.  
-PfxPass must NOT be used with failsafe.
+1. Ensures SecretManagement & SecretStore modules exist  
+2. Registers and sets SecretStore as default vault  
+3. Initializes the vault if necessary  
+4. Unlocks it using `securePassword.xml`  
+5. Loads required secrets  
 
 Example:
+
 ```powershell
-.\LetsEncryptWebport.ps1 -failsafe
+Set-Secret -Name PluginArgs -Secret $pArgs
+Set-Secret -Name PfxPass   -Secret "MyStrongPassword"
+Set-Secret -Name SmtpPwd   -Secret "S3cur3!"
 ```
----
 
-## ⏰ Scheduled Weekly Renewal
+List secrets:
 
-The script can create an automated weekly scheduled task that renews certificates and rebuilds P12.
-
-- Runs PowerShell 7
-- Runs elevated
-- Executes IssueCert + ExportPfx paths
-
-Trigger: Weekly
-
-Generate using:
 ```powershell
-.\LetsEncryptWebport.ps1 -CreateScheduledTask
+Get-SecretInfo
 ```
----
-
-## ⚠ Important Notes
-
-- Must run under PowerShell 7+
-- Must run elevated (Administrator)
-- CSR must first be created via WebPort GUI
-- PfxPass is required unless in failsafe
-- DNS plugin + PluginArgsFile required for ACME
-- OpenSSL must be installed
-- Certificates installed into LocalMachine\My
 
 ---
 
-## 👤 Author & Revision
+## 🧩 DNS Plugin Configuration
 
-| Field | Value |
-|-------|-------|
-| Author | Magnus Ardström |
-| Version | 1.0.0 |
-| Last Updated | 2025-11-09 |
+Documentation:  
+https://poshac.me/docs/v4/Plugins/
+
+Show plugin guides:
+
+```powershell
+Get-PAPlugin -Plugin Azure      -Guide
+Get-PAPlugin -Plugin Cloudflare -Guide
+Get-PAPlugin -Plugin AcmeDns    -Guide
+```
 
 ---
 
-## ✅ Summary
+## 🔄 ACME Certificate Flow
 
-This script automates full certificate lifecycle management for WebPort:
+1. CSR is created through WebPort GUI  
+2. Script reads CSR and submits ACME order  
+3. DNS‑01 challenge performed  
+4. Certificate chain retrieved  
+5. WebPort DB updated:
+   - SSLCAPC (leaf)  
+   - SSLCAIC (intermediate)  
+   - SSLCARC (root)  
+6. P12 file created  
+7. Optional: certificate installed into certstore  
+8. WebPort restarted  
 
-1. Reads CSR from WebPort
-2. Performs ACME certificate request
-3. Updates WebPort DB with leaf/intermediate/root
-4. Builds P12 and installs it
-5. Cleans old Windows certs
-6. Opens firewall port
-7. Restarts WebPort
-8. Can schedule recurring renewals
-9. Failsafe recovery available
+---
 
-It provides complete end-to-end automated TLS support for WebPort.
+## 🧯 Failsafe Mode
+
+Clears:
+
+- SSLCSR  
+- SSLPPK  
+- SSLCAPC  
+- SSLCAIC  
+- SSLCARC  
+- SSLCP  
+
+Removes P12 and matching installed certificates.  
+Restarts WebPort.
+
+---
+
+## 📬 Email Reporting
+
+If `-Sendmail` is provided:
+
+### When errors are detected:
+Subject:  
+`<CN> - Problem renewing certificate`
+
+### When everything succeeded:
+Subject:  
+`<CN> - Certificate renewed`
+
+Log entries scanned for:
+
+- exception  
+- error  
+- fail  
+- timeout  
+- denied  
+- invalid  
+- could not  
+- not found  
+
+SMTP settings must exist in WebPort DB.
+
+---
+
+## ⏱ Scheduled Task Creation
+
+The script creates a weekly task:
+
+- Runs with current user (`S4U` logon type)  
+- Uses PowerShell 7  
+- Uses same parameters as the script was executed with  
+- Working directory is the script's folder  
+- Execution time limit: **5 minutes**  
+
+---
+
+## 📜 Requirements
+
+- PowerShell 7+  
+- Administrator privileges  
+- WebPort installed  
+- CSR created in WebPort GUI  
+- DNS plugin parameters configured in SecretStore  
+
+---
+
+## 👤 Author
+
+**Magnus Ardström**  
+Version: **1.0.0**  
+Last Updated: **2025‑11‑09**
+
+---
+
+## 📁 Recommended Repository Structure
+
+```
+/WebPort-ACME/
+│
+├─ LetsEncryptWebPort.ps1
+├─ README.md
+├─ securePassword.xml
+└─ pluginArgs.json
+```
+
+---
+
+## 📝 Notes
+
+- ENSURE SAN entries are present in the CSR; missing SAN causes  
+  `asn1: syntax error: sequence truncated`  
+- Logging is stored in `ScriptName-logs/` for 100 days  
+- WebPort may run as service or standalone EXE; script handles both  
+- OpenSSL is required for P12 construction  
 
