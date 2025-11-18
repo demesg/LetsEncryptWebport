@@ -76,6 +76,8 @@ To list all plugins and specific guides:
 Get-PAPlugin
 Get-PAPlugin Azure -Guide
 ```
+Follow guide to create the $pArgs variable in Powershell.
+
 
 ### Download the Script
 
@@ -85,12 +87,14 @@ You can fetch the latest version directly from GitHub:
 curl "https://raw.githubusercontent.com/demesg/LetsEncryptWebport/refs/heads/main/LetsEncryptWebport.ps1" `
   -o "C:\Script\LetsEncryptWebport.ps1"
 ```
+Make sure UTF- with bom is used .
+
 
 ## SecretStore Usage
 
 Store sensitive values securely:
 ```powershell
-Set-Secret -Name PluginArgs -Secret $pluginArgs
+Set-Secret -Name PluginArgs -Secret $pArgs
 Set-Secret -Name PfxPass -Secret "MyStrongPassword"
 Set-Secret -Name SmtpPwd -Secret "S3cur3!"
 ```
