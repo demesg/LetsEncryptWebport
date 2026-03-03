@@ -97,15 +97,15 @@ curl "https://raw.githubusercontent.com/demesg/LetsEncryptWebport/refs/heads/mai
 ```
 Make sure UTF- with bom is used .
 
+Run script to initialize Secretstore:
 
-## SecretStore Usage
-
-Store sensitive values securely:
 ```powershell
-Set-Secret -Name PluginArgs -Secret $pArgs
-Set-Secret -Name PfxPass -Secret "MyStrongPassword"
-Set-Secret -Name SmtpPwd -Secret "S3cur3!"
+cd c:\script
+.\LetsEncryptWebport.ps1
 ```
+Provide a password for SecretStore. 
+An Exception is expected now.
+
 
 List stored secrets:
 ```powershell
@@ -127,10 +127,18 @@ To continue, you must create a CSR in the WebPort GUI. Exactly like this:
 The CSR will then be automatically stored in the database (`settings → SSLCSR`).
 Common Name (CN) needs to be in the domain DNS plugin can manage.
 Run the script after the CSR has been created.
-
-
-
 ---
+
+## SecretStore setup
+
+Store sensitive values securely:
+```powershell
+Set-Secret -Name PluginArgs -Secret $pArgs
+Set-Secret -Name PfxPass -Secret "PfxPassPassword"
+
+Set-Secret -Name SmtpPwd -Secret "SMTPPassword!"
+```
+
 
 # Examples
 
