@@ -419,6 +419,54 @@ function Assert-OpenSslExit {
     }
 }
 
+function ConvertTo-WindowsCommandLineArgument {
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [string]$Value
+    )
+
+    if ($null -eq $Value -or $Value.Length -eq 0) {
+        return '""'
+    }
+
+    if ($Value -notmatch '[\s"]') {
+        return $Value
+    }
+
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append('"')
+    $backslashCount = 0
+
+    foreach ($ch in $Value.ToCharArray()) {
+        if ($ch -eq '\') {
+            $backslashCount++
+            continue
+        }
+
+        if ($ch -eq '"') {
+            [void]$sb.Append(([char]92), ($backslashCount * 2) + 1)
+            [void]$sb.Append('"')
+            $backslashCount = 0
+            continue
+        }
+
+        if ($backslashCount -gt 0) {
+            [void]$sb.Append(([char]92), $backslashCount)
+            $backslashCount = 0
+        }
+
+        [void]$sb.Append($ch)
+    }
+
+    if ($backslashCount -gt 0) {
+        [void]$sb.Append(([char]92), $backslashCount * 2)
+    }
+
+    [void]$sb.Append('"')
+    return $sb.ToString()
+}
+
 function Test-VcRedistX64Installed {
     $regPaths = @(
         "HKLM:\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64",
@@ -1201,22 +1249,33 @@ if ($CreateScheduledTask) {
     }
 
     #
-    # Build arguments the same way the script was invoked
+    # Build a robust command line for Task Scheduler.
+    # This avoids broken parsing when values end with backslash.
     #
-    $argsList = @(
-        '-NoLogo',
-        '-NoProfile',
-        '-File', "`"$ScriptPath`"",
-        '-IssueCert',
-        '-InstallPfx',
-        "-DnsPlugin `"$DnsPlugin`"",
-        "-ServerPort `"$ServerPort`"",
-        "-WebPortDataPath `"$WebPortDataPath`"",
-        "-WebPortProgPath `"$WebPortProgPath`"",
-        "-Sendmail `"$Sendmail`""
-    )
+    $effectiveDnsPlugin = if ([string]::IsNullOrWhiteSpace($DnsPlugin)) { 'Azure' } else { $DnsPlugin }
 
-    $argumentString = $argsList -join " "
+    $argsList = New-Object System.Collections.Generic.List[string]
+    $argsList.Add('-NoLogo')
+    $argsList.Add('-NoProfile')
+    $argsList.Add('-File')
+    $argsList.Add($ScriptPath)
+    $argsList.Add('-IssueCert')
+    $argsList.Add('-InstallPfx')
+    $argsList.Add('-DnsPlugin')
+    $argsList.Add($effectiveDnsPlugin)
+    $argsList.Add('-ServerPort')
+    $argsList.Add([string]$ServerPort)
+    $argsList.Add('-WebPortDataPath')
+    $argsList.Add($WebPortDataPath)
+    $argsList.Add('-WebPortProgPath')
+    $argsList.Add($WebPortProgPath)
+
+    if (-not [string]::IsNullOrWhiteSpace($Sendmail)) {
+        $argsList.Add('-Sendmail')
+        $argsList.Add($Sendmail)
+    }
+
+    $argumentString = ($argsList | ForEach-Object { ConvertTo-WindowsCommandLineArgument -Value $_ }) -join " "
 
     # Scheduled Task action
     $action = New-ScheduledTaskAction -Execute $pwsh.Source -Argument $argumentString -WorkingDirectory $ScriptDir
