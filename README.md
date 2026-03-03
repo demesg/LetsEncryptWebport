@@ -79,6 +79,13 @@ Get-PAPlugin Azure -Guide
 ```
 Follow guide to create the $pArgs variable in Powershell.
 
+Or use Deploy-PoshAcmeAzure script to setup:
+```powershell
+curl "https://raw.githubusercontent.com/demesg/LetsEncryptWebport/refs/heads/main/Deploy-PoshAcmeAzure.ps1" -o "C:\Script\Deploy-PoshAcmeAzure.ps1"
+cd c:\script
+.\Deploy-PoshAcmeAzure.ps1 -Domain MyAzureDomain.com
+$pArgs = @{}; (Get-Content 'C:\Script\PoshAcme-AzureDns-PluginConfig.json' -Raw | ConvertFrom-Json).PluginArgs.PSObject.Properties | ForEach-Object { $pArgs[$_.Name] = $_.Value }
+```
 
 ### Download the Script
 
