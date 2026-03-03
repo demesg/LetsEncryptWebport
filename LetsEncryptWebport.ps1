@@ -969,6 +969,20 @@ function Add-Log {
     $IssueCertLog.AppendLine("[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] $Text") | Out-Null
 }
 
+function Stop-TranscriptSafe {
+    if (-not (Get-Variable -Name TranscriptFile -Scope Script -ErrorAction SilentlyContinue)) {
+        return
+    }
+
+    try {
+        Stop-Transcript | Out-Null
+        Write-Host "📄 Loggning stopppad → $TranscriptFile" -ForegroundColor Cyan
+    }
+    catch {
+        # Transcript may already be stopped; ignore to keep shutdown flow clean.
+    }
+}
+
 $ScriptRoot = Split-Path -Parent $PSCommandPath
 $SecurePasswordPath = Join-Path $ScriptRoot "securePassword.xml"
 
@@ -1300,7 +1314,8 @@ if ($CreateScheduledTask) {
     Register-ScheduledTask -TaskName $taskName -InputObject $task -Force
 
     ok "Schemalagd uppgift skapad: $taskName "
-    break
+    Stop-TranscriptSafe
+    return
 }
 
 if ($IssueCert) {
@@ -1384,8 +1399,8 @@ if ($IssueCert) {
             else {
                 Add-Log "Cert finns: $($cert.Thumbprint), giltigt till: $($cert.NotAfter), dagar kvar: $daysLeft" -Level Information
                 Write-Host "   ✓ Cert finns och är giltigt i $daysLeft dagar → ingen förnyelse behövs" -ForegroundColor Green
-                Stop-Transcript
-                break
+                Stop-TranscriptSafe
+                return
             }
             
         }
@@ -1588,5 +1603,4 @@ if ($Sendmail){
 }
 
 Write-Host "`n✓ KLART" -ForegroundColor Green
-Stop-Transcript
-Write-Host "📄 Loggning stopppad → $TranscriptFile" -ForegroundColor Cyan
+Stop-TranscriptSafe
