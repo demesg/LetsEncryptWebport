@@ -87,6 +87,8 @@ cd c:\script
 $pArgs = @{}; (Get-Content 'C:\Script\PoshAcme-AzureDns-PluginConfig.json' -Raw | ConvertFrom-Json).PluginArgs.PSObject.Properties | ForEach-Object { $pArgs[$_.Name] = $_.Value }
 ```
 
+
+# 3. The Script 
 ### Download the Script
 
 You can fetch the latest version directly from GitHub:
@@ -107,11 +109,8 @@ Provide a password for SecretStore.
 An Exception is expected now.
 
 
-List stored secrets:
-```powershell
-Get-SecretInfo
-```
-# **WebPort Setup**
+# 4. WebPort Setup
+
 To continue, you must create a CSR in the WebPort GUI. Exactly like this:
 
 1. Log in to **WebPort**
@@ -129,7 +128,7 @@ Common Name (CN) needs to be in the domain DNS plugin can manage.
 Run the script after the CSR has been created.
 ---
 
-## SecretStore setup
+# 5 SecretStore setup
 
 Store sensitive values securely:
 ```powershell
@@ -138,9 +137,12 @@ Set-Secret -Name PfxPass -Secret "PfxPassPassword"
 
 Set-Secret -Name SmtpPwd -Secret "SMTPPassword!"
 ```
+List stored secrets:
+```powershell
+Get-SecretInfo
+```
 
-
-# Examples
+# Run Examples
 
 ### Request + Install Certificate
 ```powershell
