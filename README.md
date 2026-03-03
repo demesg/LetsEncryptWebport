@@ -61,7 +61,7 @@ Install Win64OpenSSL Light from:
 ```powershell
 $u="https://slproweb.com/download/Win64OpenSSL_Light-3_6_1.exe"; $f="$env:TEMP\openssl.exe"; Invoke-WebRequest $u -OutFile $f; Start-Process $f -ArgumentList "/silent","/verysilent","/sp-","/suppressmsgboxes" -Wait; Remove-Item $f -Force
 ```
-Version may chang, check for latest version:
+Version may change, check for latest version:
 https://slproweb.com/products/Win32OpenSSL.html
 
 ---
@@ -97,7 +97,7 @@ You can fetch the latest version directly from GitHub:
 curl "https://raw.githubusercontent.com/demesg/LetsEncryptWebport/refs/heads/main/LetsEncryptWebport.ps1" `
   -o "C:\Script\LetsEncryptWebport.ps1"
 ```
-Make sure UTF- with bom is used .
+Make sure UTF-8 with bom is used .
 
 Run script to initialize Secretstore:
 
@@ -165,8 +165,8 @@ Get-SecretInfo
 # Logging
 
 All script runs produce timestamped logs under:
-```
-<ScriptPath>\<ScriptName>-logs```
+
+<ScriptPath>\<ScriptName>-logs
 
 ---
 
@@ -193,4 +193,4 @@ If `-Sendmail you@example.com` is provided:
 # Author
 
 **Original Author:** Magnus Ardström  
-Version 1.0.0 — 2025-11-09  
+Version 1.1.0 — 2025-11-09  
