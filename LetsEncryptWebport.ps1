@@ -359,9 +359,12 @@ function Normalize-Pem {
 }
 
 function Test-OpenSSL {
+    $script:OpenSslDiagnostics = @()
+    $candidates = New-Object System.Collections.Generic.List[string]
+
     $cmd = Get-Command "openssl" -ErrorAction SilentlyContinue
     if ($cmd -and $cmd.Source) {
-        return $cmd.Source
+        [void]$candidates.Add($cmd.Source)
     }
 
     $commonPaths = @(
@@ -372,12 +375,133 @@ function Test-OpenSSL {
     )
 
     foreach ($path in $commonPaths) {
-        if (Test-Path $path) {
-            return $path
+        if ((Test-Path -LiteralPath $path) -and -not $candidates.Contains($path)) {
+            [void]$candidates.Add($path)
+        }
+    }
+
+    foreach ($candidate in $candidates) {
+        try {
+            & $candidate version 2>$null | Out-Null
+            $exitCode = $LASTEXITCODE
+            if ($exitCode -eq 0) {
+                return $candidate
+            }
+
+            $script:OpenSslDiagnostics += "OpenSSL hittad men kunde inte köras: $candidate (exitkod: $exitCode)"
+        }
+        catch {
+            $script:OpenSslDiagnostics += "OpenSSL startfel: $candidate ($($_.Exception.Message))"
         }
     }
 
     return $null
+}
+
+function Assert-OpenSslExit {
+    param(
+        [Parameter(Mandatory = $true)][int]$ExitCode,
+        [Parameter(Mandatory = $true)][string]$Operation,
+        [Parameter(Mandatory = $true)][string]$OpenSslPath,
+        [string]$ExpectedOutputPath
+    )
+
+    if ($ExitCode -eq -1073741515) {
+        throw "OpenSSL kunde inte starta under '$Operation' (exitkod: $ExitCode). Det brukar betyda saknad DLL/runtime. Installera OpenSSL Win64 + Microsoft Visual C++ Redistributable x64 och prova igen. OpenSSL: $OpenSslPath"
+    }
+
+    if ($ExitCode -ne 0) {
+        throw "OpenSSL-fel under '$Operation' (exitkod: $ExitCode). OpenSSL: $OpenSslPath"
+    }
+
+    if ($ExpectedOutputPath -and -not (Test-Path -LiteralPath $ExpectedOutputPath)) {
+        throw "OpenSSL slutförde '$Operation' utan felkod men output-filen saknas: $ExpectedOutputPath"
+    }
+}
+
+function Test-VcRedistX64Installed {
+    $regPaths = @(
+        "HKLM:\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64",
+        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\VisualStudio\14.0\VC\Runtimes\x64"
+    )
+
+    foreach ($regPath in $regPaths) {
+        if (-not (Test-Path -LiteralPath $regPath)) {
+            continue
+        }
+
+        try {
+            $item = Get-ItemProperty -Path $regPath -ErrorAction Stop
+            if ($item.Installed -eq 1) {
+                return [pscustomobject]@{
+                    Installed = $true
+                    Version = [string]$item.Version
+                    RegistryPath = $regPath
+                }
+            }
+        }
+        catch {
+            continue
+        }
+    }
+
+    return [pscustomobject]@{
+        Installed = $false
+        Version = $null
+        RegistryPath = $null
+    }
+}
+
+function Ensure-VcRedistX64 {
+    [CmdletBinding()]
+    param(
+        [string]$DownloadUrl = "https://aka.ms/vc14/vc_redist.x64.exe"
+    )
+
+    $vcState = Test-VcRedistX64Installed
+    if ($vcState.Installed) {
+        Add-Log "VC++ x64 runtime hittades. Version: $($vcState.Version)"
+        ok "VC++ x64 runtime installerad (version $($vcState.Version))"
+        return
+    }
+
+    warn "Microsoft Visual C++ Redistributable x64 saknas."
+    Add-Log "VC++ x64 runtime saknas."
+
+    $answer = Read-Host "VC++ runtime krävs för OpenSSL. Vill du installera nu? (J/N)"
+    if ($answer -notmatch '^(?i)(j|y|ja|yes)$') {
+        throw "VC++ runtime installerades inte. Avbryter eftersom OpenSSL annars kan fallera."
+    }
+
+    $installerPath = Join-Path $env:TEMP "vc_redist.x64.exe"
+    Add-Log "Laddar ner VC++ installer från: $DownloadUrl"
+    step "Laddar ner vc_redist.x64.exe"
+    Invoke-WebRequest -Uri $DownloadUrl -OutFile $installerPath -UseBasicParsing -ErrorAction Stop
+
+    if (-not (Test-Path -LiteralPath $installerPath)) {
+        throw "Nedladdning misslyckades: $installerPath skapades inte."
+    }
+
+    Add-Log "Startar VC++ installation: $installerPath"
+    step "Installerar Microsoft Visual C++ x64 runtime"
+    $proc = Start-Process -FilePath $installerPath -ArgumentList "/install", "/passive", "/norestart" -Verb RunAs -Wait -PassThru
+    Add-Log "VC++ installer exitkod: $($proc.ExitCode)"
+
+    if ($proc.ExitCode -notin 0, 1638, 1641, 3010) {
+        throw "VC++ installation misslyckades (exitkod: $($proc.ExitCode))."
+    }
+
+    $vcState = Test-VcRedistX64Installed
+    if (-not $vcState.Installed) {
+        throw "VC++ installation verkar inte ha slutförts korrekt. Runtime hittades inte efter installation."
+    }
+
+    if ($proc.ExitCode -in 1641, 3010) {
+        warn "VC++ installerades, men en omstart rekommenderas (exitkod: $($proc.ExitCode))."
+    }
+    else {
+        ok "VC++ x64 runtime installerad (version $($vcState.Version))"
+    }
 }
 
 function Upsert-WebPortSetting {
@@ -1232,17 +1356,25 @@ if ($InstallPfx) {
     Add-Log "Initierar byggandet av webport.p12"
 
     try {
+        Ensure-VcRedistX64
 
         $openssl = Test-OpenSSL
         if (-not $openssl) {
             Add-Log "FEL: OpenSSL saknas"
-            throw "OpenSSL saknas – installera först! https://slproweb.com/products/Win32OpenSSL.html"
+            $diagText = if ($script:OpenSslDiagnostics -and $script:OpenSslDiagnostics.Count -gt 0) {
+                "`nDiagnostik:`n - " + ($script:OpenSslDiagnostics -join "`n - ")
+            }
+            else {
+                ""
+            }
+            throw "OpenSSL saknas eller kan inte starta – installera/repair OpenSSL + VC++ runtime. https://slproweb.com/products/Win32OpenSSL.html$diagText"
         }
 
         Add-Log "OpenSSL hittades: $openssl"
 
         $tmp = $env:TEMP
         $pfxTemp = Join-Path $tmp "webport_temp.pfx"
+        $webportP12Path = Join-Path $WebPortDataPath "webport.p12"
         Add-Log "Temporär PFX-sökväg: $pfxTemp"
 
         # Paths för pem-material
@@ -1275,12 +1407,15 @@ if ($InstallPfx) {
             Add-Log "Extraherar cert och key från PFX via OpenSSL"
 
             & $openssl pkcs12 -in  $pfxTemp -nodes -nokeys  -out $certPath    -password pass:$PfxPass
+            Assert-OpenSslExit -ExitCode $LASTEXITCODE -Operation "extrahera cert.pem" -OpenSslPath $openssl -ExpectedOutputPath $certPath
             Add-Log "Extraherat cert → $certPath"
 
             & $openssl pkcs12 -in  $pfxTemp -nodes -nocerts -out $privKeyPath -password pass:$PfxPass
+            Assert-OpenSslExit -ExitCode $LASTEXITCODE -Operation "extrahera privkey.pem" -OpenSslPath $openssl -ExpectedOutputPath $privKeyPath
             Add-Log "Extraherat privat nyckel → $privKeyPath"
 
             & $openssl pkcs12 -in  $pfxTemp -nodes -nokeys  -out $chainPath   -password pass:$PfxPass
+            Assert-OpenSslExit -ExitCode $LASTEXITCODE -Operation "extrahera chain.pem" -OpenSslPath $openssl -ExpectedOutputPath $chainPath
             Add-Log "Extraherat chain.pem → $chainPath"
         }
         else {
@@ -1342,14 +1477,19 @@ if ($InstallPfx) {
             -inkey    $privKeyPath `
             -in       $certPath `
             -certfile $chainPath `
-            -out      "$WebPortDataPath\webport.p12" `
+            -out      $webportP12Path `
             -password pass:$PfxPass
 
-        Add-Log "webport.p12 skapad → $WebPortDataPath\webport.p12"
-        ok "P12 skapad → $WebPortDataPath\webport.p12"
+        Assert-OpenSslExit -ExitCode $LASTEXITCODE -Operation "skapa webport.p12" -OpenSslPath $openssl -ExpectedOutputPath $webportP12Path
+
+        Add-Log "webport.p12 skapad → $webportP12Path"
+        ok "P12 skapad → $webportP12Path"
         step "Installerar cert i LocalMachine\My"
         Add-Log "Installerar certifikat i LocalMachine\My"
-        certutil -f -p $PfxPass -ImportPfx "$WebPortDataPath\webport.p12"
+        & certutil -f -p $PfxPass -ImportPfx $webportP12Path
+        if ($LASTEXITCODE -ne 0) {
+            throw "certutil ImportPfx misslyckades för '$webportP12Path' (exitkod: $LASTEXITCODE)"
+        }
         Add-Log "certutil ImportPfx slutförd"
         Restart-WebPort
         Add-Log "WebPort restartad efter cert-installation"
@@ -1391,6 +1531,3 @@ if ($Sendmail){
 Write-Host "`n✓ KLART" -ForegroundColor Green
 Stop-Transcript
 Write-Host "📄 Loggning stopppad → $TranscriptFile" -ForegroundColor Cyan
-
-
-
