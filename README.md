@@ -126,6 +126,7 @@ To continue, you must create a CSR in the WebPort GUI. Exactly like this:
 The CSR will then be automatically stored in the database (`settings → SSLCSR`).
 Common Name (CN) needs to be in the domain DNS plugin can manage.
 Run the script after the CSR has been created.
+
 ---
 
 # 5 SecretStore setup
@@ -142,7 +143,7 @@ List stored secrets:
 Get-SecretInfo
 ```
 
-# Run Examples
+# 6 Run Examples
 
 ### Request + Install Certificate
 ```powershell
