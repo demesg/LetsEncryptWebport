@@ -59,8 +59,9 @@ The script uses OpenSSL when building the `.p12`.
 
 Install Win64OpenSSL Light from:  
 ```powershell
-$u="https://slproweb.com/download/Win64OpenSSL_Light-3_6_0.exe"; $f="$env:TEMP\openssl.exe"; Invoke-WebRequest $u -OutFile $f; Start-Process $f -ArgumentList "/silent","/verysilent","/sp-","/suppressmsgboxes" -Wait; Remove-Item $f -Force
+$u="https://slproweb.com/download/Win64OpenSSL_Light-3_6_1.exe"; $f="$env:TEMP\openssl.exe"; Invoke-WebRequest $u -OutFile $f; Start-Process $f -ArgumentList "/silent","/verysilent","/sp-","/suppressmsgboxes" -Wait; Remove-Item $f -Force
 ```
+Version may chang, check for latest version:
 https://slproweb.com/products/Win32OpenSSL.html
 
 ---
