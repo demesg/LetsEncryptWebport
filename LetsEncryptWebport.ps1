@@ -896,14 +896,18 @@ function Send-WebPortMail {
     if (-not $smtpFrom)   { throw "SMTP avsändaradress saknas i WebPort DB." }
 
     try {
-        # TODO: ersätt med riktig dekryptering av smtppassword senare:
-        $SmtpPwd = ConvertTo-SecureString -String 'vH0z1oix73VfSaLs' -AsPlainText -Force
+        $smtpPwdPlain = Get-Secret -Name "SmtpPwd" -AsPlainText -ErrorAction Stop
+        if ([string]::IsNullOrWhiteSpace($smtpPwdPlain)) {
+            throw "Secret 'SmtpPwd' är tomt."
+        }
+
+        $smtpPwdSecure = ConvertTo-SecureString -String $smtpPwdPlain -AsPlainText -Force
     }
     catch {
-        throw "Kunde inte dekryptera SMTP-lösenordet (smtppassword) i databasen."
+        throw "Kunde inte läsa SMTP-lösenord från SecretStore (secret 'SmtpPwd'): $($_.Exception.Message)"
     }
 
-    $credential = New-Object System.Management.Automation.PSCredential($smtpUser, $SmtpPwd)
+    $credential = New-Object System.Management.Automation.PSCredential($smtpUser, $smtpPwdSecure)
     Write-Host "smtpUser: $smtpUser to: $To subject: $Subject server: $smtpServer port: $smtpPort ssl: $smtpSsl from: $smtpFrom"
 
     # Bygg mailmeddelande
