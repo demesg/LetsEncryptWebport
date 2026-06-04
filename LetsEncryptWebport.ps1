@@ -81,8 +81,13 @@ SecretStore is used to securely store sensitive script parameters:
         • PfxPass    – WebPort P12 password
         • SmtpPwd    – SMTP account password
 
+LetsEncryptWebport.ps1 reads DNS plugin arguments from the SecretStore secret named PluginArgs.
+It does not read a $pArgs variable directly. If Deploy-PoshAcmeAzure.ps1 was used first, run it in
+PowerShell and then save the generated $pArgs to SecretStore before running this script.
+
 .EXAMPLE
-# Adding DNS plugin arguments to SecretStore:
+# Prepare Azure DNS plugin arguments and save them to SecretStore:
+.\Deploy-PoshAcmeAzure.ps1 -Domain MyAzureDomain.com
 Set-Secret -Name PluginArgs -Secret $pArgs
 Set-Secret -Name PfxPass -Secret "MyStrongPassword"
 Set-Secret -Name SmtpPwd -Secret "S3cur3!"
@@ -1032,7 +1037,10 @@ if ($UseSecretStore -and !$failsafe) {
     if (-not (Test-Path $SecurePasswordPath)) {
         Write-Host "   ⚠ securePasswordPath saknas → skapar..." -ForegroundColor Yellow
 
-        $pwd = Read-Host "Ange SecretStore-lösenord för export" -AsSecureString
+        Write-Host "   Detta är lösenordet som låser upp PowerShell SecretStore." -ForegroundColor Gray
+        Write-Host "   Det sparas krypterat till securePassword.xml för den här Windows-användaren/datorn och är inte Azure-lösenord, PFX-lösenord eller webbcertifikat." -ForegroundColor Gray
+        Write-Host "   Rekommendation: använd ett eget långt random lösenord, inte samma som Windows- eller tjänstekontots lösenord." -ForegroundColor Gray
+        $pwd = Read-Host "Ange SecretStore-upplåsningslösenord som ska sparas krypterat lokalt" -AsSecureString
         $pwd | Export-CliXml -Path $SecurePasswordPath
 
         Write-Host "   ✓ Lösenord exporterat till $SecurePasswordPath" -ForegroundColor Green
