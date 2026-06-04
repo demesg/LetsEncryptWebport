@@ -150,9 +150,10 @@ Get-SecretInfo
 
 # 6 Run Examples
 
+`-ServerPort 443` is used in the examples below. In normal runs the script reads the active WebPort port from `webport.conf`; when creating a scheduled task, the parameter is included in the task arguments.
 ### Request + Install Certificate
 ```powershell
-.\LetsEncryptWebport.ps1 -IssueCert -InstallPfx -DnsPlugin Azure -Sendmail you@example.com 
+.\LetsEncryptWebport.ps1 -IssueCert -InstallPfx -DnsPlugin Azure -ServerPort 443 -Sendmail you@example.com 
 ```
 
 ### Cleanup / Reset SSL Data
@@ -162,7 +163,7 @@ Get-SecretInfo
 
 ### Create Scheduled Task
 ```powershell
-.\LetsEncryptWebport.ps1 -IssueCert -InstallPfx -DnsPlugin Azure -Sendmail you@example.com -CreateScheduledTask 
+.\LetsEncryptWebport.ps1 -IssueCert -InstallPfx -DnsPlugin Azure -ServerPort 443 -Sendmail you@example.com -CreateScheduledTask 
 ```
 
 ---
