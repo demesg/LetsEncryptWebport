@@ -23,7 +23,7 @@ PARAMETERS
 
   -DnsPlugin
       Specifies the DNS plugin used for ACME DNS-01 validation.
-      Default plugin is "Azure".  
+      Default plugin is "Azure".
       List available plugins: Get-PAPlugin
 
   -Sendmail
@@ -65,7 +65,7 @@ etc.):
         Sends an email titled "<CN> - Certificate renewed"
 
 SMTP settings must exist in the WebPort database:
-    smtpserver, smtpport, smtpssl, smtpencoding, smtpfrom, smtpuser  
+    smtpserver, smtpport, smtpssl, smtpencoding, smtpfrom, smtpuser
     The password (smtppassword) is retrieved from SecretStore as SmtpPwd.
 
 .SECRETSTORE USAGE
@@ -110,7 +110,7 @@ Unregister-SecretVault -Name SecretStore
 Remove-Item "$env:LOCALAPPDATA\Microsoft\PowerShell\secretmanagement\secretstore" -Recurse -Force
 
 .DNS PLUGIN SUPPORT
-All Posh-ACME plugins are supported.  
+All Posh-ACME plugins are supported.
 Display plugin documentation:
     Get-PAPlugin -Plugin Azure      -Guide
     Get-PAPlugin -Plugin Cloudflare -Guide
@@ -136,7 +136,7 @@ Display plugin documentation:
     Version:            1.0.0   2025-11-09
     Version:            1.1.0   2025-11-17
     Version:            1.1.1   2025-11-18
-       
+
 #>
 
 
@@ -181,24 +181,27 @@ param(
     [Parameter(ParameterSetName="Normal")]
     [Parameter(ParameterSetName="FailSafe")]
     [Parameter(ParameterSetName="CreateScheduledTask")]
-    [string]$Sendmail  
+    [string]$Sendmail
 
 )
 
 $banner = @'
-  _          _       ______                             _    __          __  _     _____           _   
- | |        | |     |  ____|                           | |   \ \        / / | |   |  __ \         | |  
- | |     ___| |_ ___| |__   _ __   ___ _ __ _   _ _ __ | |_   \ \  /\  / /__| |__ | |__) |__  _ __| |_ 
+  _          _       ______                             _    __          __  _     _____           _
+ | |        | |     |  ____|                           | |   \ \        / / | |   |  __ \         | |
+ | |     ___| |_ ___| |__   _ __   ___ _ __ _   _ _ __ | |_   \ \  /\  / /__| |__ | |__) |__  _ __| |_
  | |    / _ \ __/ __|  __| | '_ \ / __| '__| | | | '_ \| __|   \ \/  \/ / _ \ '_ \|  ___/ _ \| '__| __|
- | |___|  __/ |_\__ \ |____| | | | (__| |  | |_| | |_) | |_     \  /\  /  __/ |_) | |  | (_) | |  | |_ 
+ | |___|  __/ |_\__ \ |____| | | | (__| |  | |_| | |_) | |_     \  /\  /  __/ |_) | |  | (_) | |  | |_
  |______\___|\__|___/______|_| |_|\___|_|   \__, | .__/ \__|     \/  \/ \___|_.__/|_|   \___/|_|   \__|
-                                             __/ | |                                                   
-                                            |___/|_|                                                   
+                                             __/ | |
+                                            |___/|_|
 '@
 
 Write-Host $banner -ForegroundColor Magenta
 
-[string]$SqliteDllPath  = "$WebPortProgPath\System.Data.SQLite.dll"
+[string]$SystemDataSqliteDllPath    = "$WebPortProgPath\System.Data.SQLite.dll"
+[string]$MicrosoftDataSqliteDllPath = "$WebPortProgPath\Microsoft.Data.Sqlite.dll"
+[string]$SqliteProvider             = $null
+[string]$SqliteDllPath              = $null
 [string]$WebPortDbPath  = "$WebPortDataPath\db\webport.sqlite"
 
 $ErrorActionPreference = "Stop"
@@ -208,13 +211,59 @@ function ok  ($t){ Write-Host "   ✓ $t" -ForegroundColor Green }
 function warn($t){ Write-Host "   ⚠ $t" -ForegroundColor Yellow }
 function err ($t){ Write-Host "   ✖ $t" -ForegroundColor Red }
 
-function Read-WebPortSettings {
-    if (!(Test-Path $SqliteDllPath)) { throw "SQLite DLL saknas: $SqliteDllPath" }
+function Initialize-WebPortSqliteProvider {
+    if ($script:SqliteProvider) { return }
+
+    if (Test-Path $MicrosoftDataSqliteDllPath) {
+        $script:SqliteProvider = 'Microsoft.Data.Sqlite'
+        $script:SqliteDllPath = $MicrosoftDataSqliteDllPath
+
+        $sqlitePclDlls = @(
+            "$WebPortProgPath\SQLitePCLRaw.core.dll",
+            "$WebPortProgPath\SQLitePCLRaw.provider.dynamic_cdecl.dll",
+            "$WebPortProgPath\SQLitePCLRaw.batteries_v2.dll"
+        )
+
+        foreach ($dll in $sqlitePclDlls) {
+            if (Test-Path $dll) {
+                Add-Type -Path $dll -ErrorAction SilentlyContinue
+            }
+        }
+
+        Add-Type -Path $script:SqliteDllPath -ErrorAction Stop
+
+        if ('SQLitePCL.Batteries_V2' -as [type]) {
+            [SQLitePCL.Batteries_V2]::Init()
+        }
+
+        Write-Host "   ✓ SQLite provider: Microsoft.Data.Sqlite" -ForegroundColor Green
+        return
+    }
+
+    if (Test-Path $SystemDataSqliteDllPath) {
+        $script:SqliteProvider = 'System.Data.SQLite'
+        $script:SqliteDllPath = $SystemDataSqliteDllPath
+        Add-Type -Path $script:SqliteDllPath -ErrorAction Stop
+        Write-Host "   ✓ SQLite provider: System.Data.SQLite" -ForegroundColor Green
+        return
+    }
+
+    throw "SQLite DLL saknas. Sökte: $MicrosoftDataSqliteDllPath och $SystemDataSqliteDllPath"
+}
+
+function New-WebPortSqliteConnection {
+    Initialize-WebPortSqliteProvider
+
     if (!(Test-Path $WebPortDbPath)) { throw "DB saknas: $WebPortDbPath" }
 
-    Add-Type -Path $SqliteDllPath
-
-    $conn = New-Object System.Data.SQLite.SQLiteConnection("Data Source=$WebPortDbPath;")
+    switch ($script:SqliteProvider) {
+        'Microsoft.Data.Sqlite' { return [Microsoft.Data.Sqlite.SqliteConnection]::new("Data Source=$WebPortDbPath") }
+        'System.Data.SQLite'    { return [System.Data.SQLite.SQLiteConnection]::new("Data Source=$WebPortDbPath;") }
+        default                 { throw "Okänd SQLite provider: $script:SqliteProvider" }
+    }
+}
+function Read-WebPortSettings {
+    $conn = New-WebPortSqliteConnection
     $conn.Open()
 
     $data = @{}
@@ -292,7 +341,7 @@ function Set-WebPortServerPort {
 
     if (-not (Test-Path $confPath)) {
         Write-Host "⚠ webport.conf saknas – skapar ny standardfil" -ForegroundColor Yellow
-        
+
         $defaultConf = @{
             default = @{
                 ServerPort = $ServerPort
@@ -559,7 +608,7 @@ function Ensure-VcRedistX64 {
 
 function Upsert-WebPortSetting {
     param(
-        [System.Data.SQLite.SQLiteConnection]$Conn,
+        [System.Data.Common.DbConnection]$Conn,
         [string]$Key,
         [string]$Value,
         [string]$DeviceGuid
@@ -598,10 +647,7 @@ function Update-WebPortCertChain {
     $LeafNorm = Normalize-Pem $LeafPem
     $InterNorm = Normalize-Pem $IntermediatePem
     $RootNorm = Normalize-Pem $RootPem
-
-    Add-Type -Path $SqliteDllPath 
-
-    $conn = New-Object System.Data.SQLite.SQLiteConnection("Data Source=$WebPortDbPath;")
+    $conn = New-WebPortSqliteConnection
     $conn.Open()
 
     try {
@@ -622,13 +668,7 @@ function Reset-WebPortSSL {
 
     Write-Host ""
     Write-Host "   ⚠ Failsafe – rensar SSL-relaterade fält i WebPort DB…" -ForegroundColor Yellow
-
-    if (!(Test-Path $SqliteDllPath)) { throw "saknar SQLite DLL: $SqliteDllPath" }
-    if (!(Test-Path $WebPortDbPath)) { throw "saknar DB: $WebPortDbPath" }
-
-    Add-Type -Path $SqliteDllPath
-
-    $conn = New-Object System.Data.SQLite.SQLiteConnection("Data Source=$WebPortDbPath;")
+    $conn = New-WebPortSqliteConnection
     $conn.Open()
 
     try {
@@ -1069,7 +1109,7 @@ Set-Secret -Name PluginArgs -Secret `$pArgs
 
 När pArgs är korrekt inlagda i SecretStore, kör scriptet igen.
 "@
-          throw "Secret 'PluginArgs' saknas i SecretStore. Skapa och lägg till enligt instruktioner ovan."        
+          throw "Secret 'PluginArgs' saknas i SecretStore. Skapa och lägg till enligt instruktioner ovan."
     }
 
     try {
@@ -1169,7 +1209,7 @@ if (!$failsafe) {
     if ([string]::IsNullOrWhiteSpace($SSLCP)) {
         Write-Host "   ✖ Inget Cert-lösenord hittad i WebPort-databasen." -ForegroundColor Red
     }
-        
+
     if ([string]::IsNullOrWhiteSpace($SSLCSR)) {
         Write-Host "   ✖ Ingen CSR (SSLCSR) hittad i WebPort-databasen." -ForegroundColor Red
     }
@@ -1206,7 +1246,7 @@ if (!$failsafe) {
     $csrFile = Join-Path $env:TEMP "wp.csr"
     Set-Content $csrFile $SSLCSR -Encoding ascii
     ok "CSR skriven till $csrFile"
-    
+
     step "Läser WebPort conf-file $WebPortDataPath\webport.conf"
 
     if (!(Test-Path "$WebPortDataPath\webport.conf")) {
@@ -1340,11 +1380,11 @@ if ($IssueCert) {
 
     try {
 
-        
-        $PluginArgs = Get-Secret -Name PluginArgs -AsPlainText 
+
+        $PluginArgs = Get-Secret -Name PluginArgs -AsPlainText
         $PfxPass = Get-Secret -Name PfxPass    -AsPlainText
         $SmtpPwd = Get-Secret -Name SmtpPwd    -AsPlainText
-        
+
 
         if (($PluginArgs) -and ($PfxPass) -and ($SmtpPwd)) {
 
@@ -1352,10 +1392,10 @@ if ($IssueCert) {
             $daysLeft = ($cert.NotAfter - (Get-Date)).Days
             Add-Log "Cert finns: $($cert.Thumbprint), giltigt till: $($cert.NotAfter), dagar kvar: $daysLeft"
 
-            if ($daysLeft -lt 30 -or -not $cert) { 
+            if ($daysLeft -lt 30 -or -not $cert) {
 
                 Add-Log "Förnyar cert via ACME (CSR mode)"
-                
+
                 New-PACertificate `
                     -CSR $csrFile `
                     -DnsPlugin $DnsPlugin `
@@ -1384,7 +1424,7 @@ if ($IssueCert) {
                 else {
                     Add-Log "Get-PACertificate OK: $($pa.Thumbprint)"
                     Add-Log "Certificate giltigt till: $($pa.NotAfter)"
-                
+
                 }
 
                 # Full chain
@@ -1414,7 +1454,7 @@ if ($IssueCert) {
                 Stop-TranscriptSafe
                 return
             }
-            
+
         }
         else {
             Write-Warning "Ett eller flera secrets saknas. Avbryter steg."
@@ -1537,11 +1577,11 @@ if ($InstallPfx) {
             # Bygg chain.pem
             $chainPem = ""
 
-            if ($SSLCAIC) { 
+            if ($SSLCAIC) {
                 $chainPem += $SSLCAIC + "`n"
                 Add-Log "Intermediate cert tillagd"
             }
-            if ($SSLCARC) { 
+            if ($SSLCARC) {
                 $chainPem += $SSLCARC + "`n"
                 Add-Log "Root cert tillagd"
             }
@@ -1597,13 +1637,13 @@ if ($Sendmail){
     step "Analysera och skicka log vid fel"
     $Settings = Read-WebPortSettings
     $SSLCN    = $Settings["SSLCN"]
-    $DoSendMail = ($($IssueCertLog.ToString()) -match '(?i)(exception|error|fail|failed|timeout|denied|missing|not found|unable|could not|invalid)') 
+    $DoSendMail = ($($IssueCertLog.ToString()) -match '(?i)(exception|error|fail|failed|timeout|denied|missing|not found|unable|could not|invalid)')
 
     if ($DoSendMail) {
         step "Skickar mail till $Sendmail"
         Add-Log "Problem upptäckta i loggen → skickar mail"
         err "Problem upptäckta i loggen → skickar mail"
-        $global:IssueCertLog = $IssueCertLog 
+        $global:IssueCertLog = $IssueCertLog
         Send-WebPortMail -To $Sendmail -Subject "$SSLCN - Problem med att förnya certifikat" -Body $IssueCertLog.ToString()
         OK "Mail skickat till $Sendmail"
     }
