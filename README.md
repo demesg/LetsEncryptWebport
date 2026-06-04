@@ -121,8 +121,8 @@ To continue, you must create a CSR in the WebPort GUI. Exactly like this:
 1. Log in to **WebPort**
 2. Navigate to: **System Settings → Server → SSL Certificate**
 3. Enter:
-   - **Common Name (CN)** = (i.e. webport.xyz.com )
-   - **SAN (Subject Alternative Names)** additional names are needed (i.e. webport2.xyz.com )
+   - **Common Name (CN)** = (i.e. webport.**MyAzureDomain.com** )
+   - **SAN (Subject Alternative Names)** additional names are needed (i.e. webport2.**MyAzureDomain.com** )
    - **Password** (store for later use in PfxPass) 
 4. Click **Save**
 5. Go back to **SSL Certificate**
