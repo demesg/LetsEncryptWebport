@@ -35,6 +35,11 @@ https://learn.microsoft.com/powershell/scripting/install/installing-powershell
 
 ### Install Required Modules (Run as Administartor)
 
+#### **If scripts is disabled**
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy Bypass -Force
+```
+
 #### **Posh-ACME**
 ```powershell
 Install-Module Posh-ACME -Scope AllUsers -Force
