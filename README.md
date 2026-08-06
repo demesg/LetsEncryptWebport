@@ -123,12 +123,13 @@ To continue, you must create a CSR in the WebPort GUI. Exactly like this:
 3. Enter:
    - **Common Name (CN)** = (i.e. webport.**MyAzureDomain.com** )
    - **SAN (Subject Alternative Names)** additional names are needed (i.e. webport2.**MyAzureDomain.com** )
-   - **Password** (store for later use in PfxPass) 
+   - **Password** (store this value for later use as `PfxPass`)
 4. Click **Save**
 5. Go back to **SSL Certificate**
 6. Click **Create CSR**
 
 The CSR will then be automatically stored in the database (`settings → SSLCSR`).
+The password entered in WebPort is stored by WebPort as `SSLCP`. Use the same password for the SecretStore secret named `PfxPass`; the script uses `PfxPass` when creating and importing `webport.p12`.
 Common Name (CN) needs to be in the domain DNS plugin can manage.
 Run the script after the CSR has SecretStore has been created.
 
@@ -139,7 +140,7 @@ Run the script after the CSR has SecretStore has been created.
 Store sensitive values securely:
 ```powershell
 Set-Secret -Name PluginArgs -Secret $pArgs
-Set-Secret -Name PfxPass -Secret "PfxPassPassword"
+Set-Secret -Name PfxPass -Secret "same-password-used-when-creating-the-CSR-in-WebPort"
 
 Set-Secret -Name SmtpPwd -Secret "SMTPPassword!"
 ```
