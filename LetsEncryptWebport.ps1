@@ -1094,7 +1094,7 @@ if ($UseSecretStore -and !$failsafe) {
         # Om redan registrerad men inte default: sätt den som default
         $vault = Get-SecretVault | Where-Object { $_.Name -eq "SecretStore" }
         if (-not $vault.IsDefault) {
-            Set-DefaultSecretVault -Name SecretStore
+            Set-SecretVaultDefault -Name SecretStore
             Write-Host "✓ SecretStore satt som default vault" -ForegroundColor Green
         }
     }
