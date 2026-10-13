@@ -110,15 +110,6 @@ curl "https://raw.githubusercontent.com/demesg/LetsEncryptWebport/refs/heads/mai
 ```
 Make sure UTF-8 with bom is used .
 
-Run script to initialize Secretstore:
-
-```powershell
-cd c:\script
-.\LetsEncryptWebport.ps1
-```
-Provide a password for SecretStore. 
-An Exception is expected now.
-
 
 # 4. WebPort Setup
 
@@ -140,6 +131,15 @@ Common Name (CN) needs to be in the domain DNS plugin can manage.
 Run the script after the CSR has SecretStore has been created.
 
 > **Note:** Always fill in **SAN**, even with a single name (use the same value as CN). A CSR created without SAN is rejected by Let's Encrypt — see [Troubleshooting](#troubleshooting).
+
+Run script to initialize Secretstore:
+
+```powershell
+cd c:\script
+.\LetsEncryptWebport.ps1
+```
+Provide a password for SecretStore. 
+An Exception is expected now.
 
 ---
 
