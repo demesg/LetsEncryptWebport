@@ -165,7 +165,7 @@ If WebPort is not installed in the default folders (`C:\Program Files\WebPort` a
 
 ### Request + Install Certificate
 ```powershell
-.\LetsEncryptWebport.ps1 -IssueCert -InstallPfx -DnsPlugin Azure -Sendmail you@example.com
+.\LetsEncryptWebport.ps1 -IssueCert -InstallPfx -DnsPlugin Azure
 ```
 
 ### Change port to 443 + Request + Install Certificate
@@ -246,7 +246,7 @@ WARNING: No Certficate Attributes found in CR.
 
 | Version | Date | Changes |
 |---|---|---|
-| 1.4.0 | 2026-10-13 | `-ServerPort` no longer defaults to 8090 — the port in `webport.conf` is kept unless `-ServerPort` is given explicitly. Script aborts early if WebPort is not found in `-WebPortProgPath`/`-WebPortDataPath`. Scheduled task no longer stores `-ServerPort`; time limit raised from 5 to 30 minutes. Fixed certificate lookup when `SSLCN` contains SAN (caused renewal on every run). Documented the `asn1: sequence truncated` CSR error. OpenSSL install command now resolves the latest 3.x version (old link returned 404). |
+| 1.4.0 | 2026-10-13 | `-ServerPort` no longer defaults to 8090 — the port in `webport.conf` is kept unless `-ServerPort` is given explicitly. Script aborts early if WebPort is not found in `-WebPortProgPath`/`-WebPortDataPath`. Scheduled task no longer stores `-ServerPort`; time limit raised from 5 to 30 minutes. Fixed certificate lookup when `SSLCN` contains SAN (caused renewal on every run). Documented the `asn1: sequence truncated` CSR error. OpenSSL install command now resolves the latest 3.x version (old link returned 404). Fixed cmdlet name `Set-DefaultSecretVault` → `Set-SecretVaultDefault`. Supports SecretStore configured without password (`Authentication = None`). |
 | 1.3.0 | 2026-06-04 | Support for `Microsoft.Data.Sqlite` (newer WebPort versions), with fallback to `System.Data.SQLite`. Documentation for Azure DNS, SecretStore, CN/SAN and port 443. |
 | 1.2.0 | 2026-03-03 | `-CreateScheduledTask` (weekly renewal via PowerShell 7). OpenSSL check with automatic VC++ x64 runtime install. SMTP password read from SecretStore (`SmtpPwd`). Added `Deploy-PoshAcmeAzure.ps1`. |
 | 1.1.1 | 2025-11-18 | Fixes. |
