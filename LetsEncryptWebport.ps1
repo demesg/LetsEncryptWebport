@@ -31,10 +31,17 @@ PARAMETERS
       “success” or “problem detected” report to the provided recipient(s).
 
   -CreateScheduledTask
-      Creates a Windows Scheduled Task using PowerShell 7 that runs the script
-      with the same effective parameters and working directory.
+      Validates the setup and creates a weekly Windows Scheduled Task using
+      PowerShell 7 that runs -IssueCert -InstallPfx with the same DnsPlugin,
+      paths and Sendmail. No certificate is issued when the task is created.
+      ServerPort is not stored in the task; it is read from webport.conf.
+
+  -ServerPort
+      Only needed to change WebPort's port. If omitted, the port in
+      webport.conf is used and left unchanged.
 
 .NORMAL MODE
+  • Aborts if WebPort is not found in WebPortProgPath / WebPortDataPath
   • Reads CSR and CN from the WebPort SQLite database
   • Issues or renews certificates via ACME using the stored CSR
   • Supports any Posh-ACME DNS plugin
@@ -136,6 +143,9 @@ Display plugin documentation:
     Version:            1.0.0   2025-11-09
     Version:            1.1.0   2025-11-17
     Version:            1.1.1   2025-11-18
+    Version:            1.2.0   2026-03-03
+    Version:            1.3.0   2026-06-04
+    Version:            1.4.0   2026-10-13
 
 #>
 
@@ -161,7 +171,7 @@ param(
     [Parameter(ParameterSetName="Normal")]
     [Parameter(ParameterSetName="FailSafe")]
     [Parameter(ParameterSetName="CreateScheduledTask")]
-    [int]$ServerPort = "8090",
+    [int]$ServerPort,
 
     [Parameter(ParameterSetName="Normal")]
     [Parameter(ParameterSetName="FailSafe")]
@@ -205,6 +215,23 @@ Write-Host $banner -ForegroundColor Magenta
 [string]$WebPortDbPath  = "$WebPortDataPath\db\webport.sqlite"
 
 $ErrorActionPreference = "Stop"
+
+# Kontroll: WebPort-sökvägar (avbryt innan något annat körs)
+$missingPaths = @()
+if (-not (Test-Path (Join-Path $WebPortProgPath "WebPortServer.exe"))) {
+    $missingPaths += "WebPortServer.exe saknas i WebPortProgPath: $WebPortProgPath"
+}
+if (-not (Test-Path (Join-Path $WebPortDataPath "webport.conf"))) {
+    $missingPaths += "webport.conf saknas i WebPortDataPath: $WebPortDataPath"
+}
+if (-not (Test-Path $WebPortDbPath)) {
+    $missingPaths += "webport.sqlite saknas: $WebPortDbPath"
+}
+if ($missingPaths) {
+    foreach ($m in $missingPaths) { Write-Host "   ✖ $m" -ForegroundColor Red }
+    Write-Host "   Ange rätt sökväg med -WebPortProgPath och/eller -WebPortDataPath." -ForegroundColor Yellow
+    throw "WebPort hittades inte i angivna sökvägar."
+}
 
 function step($t){ Write-Host "==> $t" -ForegroundColor Cyan }
 function ok  ($t){ Write-Host "   ✓ $t" -ForegroundColor Green }
@@ -1182,7 +1209,11 @@ if (-not $IsAdmin) {
 }
 Write-Host "   ✓ Administratörsrättigheter OK" -ForegroundColor Green
 
-if ($ServerPort -ne (Get-WebPortServerPort -WebPortDataPath $WebPortDataPath)) {
+$currentPort = Get-WebPortServerPort -WebPortDataPath $WebPortDataPath
+if (-not $PSBoundParameters.ContainsKey('ServerPort')) {
+    Write-Host "   ServerPort = $currentPort (från webport.conf)" -ForegroundColor Green
+}
+elseif ($ServerPort -ne $currentPort) {
     step "Sätter WebPort ServerPort till $ServerPort"
     Write-Host "   ✓ Sätter WebPort ServerPort till $ServerPort" -ForegroundColor Green
     $newPort = Set-WebPortServerPort -WebPortDataPath $WebPortDataPath -ServerPort $ServerPort
@@ -1250,10 +1281,10 @@ if (!$failsafe) {
     step "Läser WebPort conf-file $WebPortDataPath\webport.conf"
 
     if (!(Test-Path "$WebPortDataPath\webport.conf")) {
-        throw "webport.conf saknas: $confPath"
+        throw "webport.conf saknas: $WebPortDataPath\webport.conf"
     }
 
-    $conf = Get-Content "$WebPortDataPath\webport.conf" -Raw | ConvertFrom-Json
+    $conf =Get-Content "$WebPortDataPath\webport.conf" -Raw | ConvertFrom-Json
     $ServerPort = $conf.default.ServerPort
     Write-Host "   ServerPort = $ServerPort" -ForegroundColor Green
     Ensure-WebPortFirewallRule -ServerPort $ServerPort
@@ -1329,8 +1360,7 @@ if ($CreateScheduledTask) {
     $argsList.Add('-InstallPfx')
     $argsList.Add('-DnsPlugin')
     $argsList.Add($effectiveDnsPlugin)
-    $argsList.Add('-ServerPort')
-    $argsList.Add([string]$ServerPort)
+    # -ServerPort utelämnas: uppgiften använder porten i webport.conf
     $argsList.Add('-WebPortDataPath')
     $argsList.Add($WebPortDataPath)
     $argsList.Add('-WebPortProgPath')
@@ -1358,7 +1388,7 @@ if ($CreateScheduledTask) {
         -RunLevel Highest `
         -LogonType S4U
 
-    $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
+    $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
 
     # Create task
     $task = New-ScheduledTask -Action $action -Trigger $trigger -Principal $principal -Settings $settings
@@ -1366,6 +1396,9 @@ if ($CreateScheduledTask) {
     Register-ScheduledTask -TaskName $taskName -InputObject $task -Force
 
     ok "Schemalagd uppgift skapad: $taskName "
+    if ($IssueCert -or $InstallPfx) {
+        warn "-IssueCert/-InstallPfx körs inte nu, utan vid schemalagd körning"
+    }
     Stop-TranscriptSafe
     return
 }
@@ -1388,7 +1421,11 @@ if ($IssueCert) {
 
         if (($PluginArgs) -and ($PfxPass) -and ($SmtpPwd)) {
 
-            $cert = Get-ChildItem Cert:\LocalMachine\My | Where-Object { $_.Subject -like "CN=$SSLCN" }
+            $certCN = ($SSLCN -split ";")[0]
+            $cert = Get-ChildItem Cert:\LocalMachine\My |
+                Where-Object { $_.Subject -eq "CN=$certCN" } |
+                Sort-Object NotAfter -Descending |
+                Select-Object -First 1
             $daysLeft = ($cert.NotAfter - (Get-Date)).Days
             Add-Log "Cert finns: $($cert.Thumbprint), giltigt till: $($cert.NotAfter), dagar kvar: $daysLeft"
 
