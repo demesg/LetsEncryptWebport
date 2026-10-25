@@ -90,7 +90,17 @@ Get-PAPlugin Azure -Guide
 ```
 Follow guide to create the $pArgs variable in Powershell.
 
-Or use Deploy-PoshAcmeAzure script to setup:
+Or use Deploy-PoshAcmeAzure script to setup.
+
+Log in to Azure first. The script reuses an existing Az context, and if that login has expired it fails with `Your Azure credentials have not been set up or have expired, please run Connect-AzAccount`:
+```powershell
+Connect-AzAccount -UseDeviceAuthentication
+# If the account has several subscriptions, select the one that holds the DNS zone:
+Set-AzContext -Subscription "<subscription name or id>"
+Get-AzContext
+```
+
+Then run the script:
 ```powershell
 curl "https://raw.githubusercontent.com/demesg/LetsEncryptWebport/refs/heads/main/Deploy-PoshAcmeAzure.ps1" -o "C:\Script\Deploy-PoshAcmeAzure.ps1"
 cd c:\script
@@ -239,6 +249,37 @@ WARNING: No Certficate Attributes found in CR.
 2. Enter **SAN** — at minimum the same name as CN (e.g. `webport.MyAzureDomain.com`). Fill in **State/Province** as well.
 3. Click **Save**, then **Create CSR**
 4. Run the script again
+
+### `Unlock-SecretStore: Store file integrity check failed`
+
+```
+Unlock-SecretStore: C:\script\LetsEncryptWebport.ps1:1125
+     | Store file integrity check failed. The provided password may be invalid, or store files have become corrupted or have been tampered with.
+```
+
+**Cause:** The SecretStore already has a password from an earlier setup, and it does not match the one saved in `securePassword.xml`. This typically happens when `securePassword.xml` was deleted and the script was run again with a new password.
+
+**Fix A – keep the store and its secrets** (if you remember the old password):
+```powershell
+Remove-Item C:\script\securePassword.xml
+```
+Run the script again and enter the **old** password.
+
+**Fix B – reset the store using the password already in `securePassword.xml`** (deletes all secrets):
+```powershell
+$pw = Import-CliXml C:\script\securePassword.xml
+Reset-SecretStore -Authentication Password -Password $pw -Interaction None -Force
+```
+Add the secrets again in the same session (the store is unlocked), then run the script again:
+```powershell
+# $pArgs must be created first – see 2. DNS Plugin Configuration
+Set-Secret -Name PluginArgs -Secret $pArgs
+Set-Secret -Name PfxPass    -Secret "same-password-used-when-creating-the-CSR-in-WebPort"
+Set-Secret -Name SmtpPwd    -Secret "SMTPPassword!"
+Get-SecretInfo
+```
+
+> **Note:** Both `securePassword.xml` and the SecretStore belong to the Windows user that created them. Run these steps as the same account the scheduled task runs as.
 
 ---
 
