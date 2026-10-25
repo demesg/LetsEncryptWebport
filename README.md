@@ -168,6 +168,12 @@ List stored secrets:
 Get-SecretInfo
 ```
 
+Remove stored secrets (e.g. to replace a value – run `-InitSecretStore` again afterwards):
+```powershell
+'PluginArgs','PfxPass','SmtpPwd' | ForEach-Object { Remove-Secret -Name $_ -Vault SecretStore }
+Get-SecretInfo
+```
+
 # 6 Run Examples
 
 `-ServerPort` is only needed to **change** WebPort's port. If omitted, the port in `webport.conf` is used and left unchanged.
