@@ -138,24 +138,25 @@ To continue, you must create a CSR in the WebPort GUI. Exactly like this:
 The CSR will then be automatically stored in the database (`settings → SSLCSR`).
 The password entered in WebPort is stored by WebPort as `SSLCP`. Use the same password for the SecretStore secret named `PfxPass`; the script uses `PfxPass` when creating and importing `webport.p12`.
 Common Name (CN) needs to be in the domain DNS plugin can manage.
-Run the script after the CSR has SecretStore has been created.
+Run the script after the CSR and SecretStore have been created.
 
 > **Note:** Always fill in **SAN**, even with a single name (use the same value as CN). A CSR created without SAN is rejected by Let's Encrypt — see [Troubleshooting](#troubleshooting).
-
-Run script to initialize Secretstore:
-
-```powershell
-cd c:\script
-.\LetsEncryptWebport.ps1
-```
-Provide a password for SecretStore. 
-An Exception is expected now.
 
 ---
 
 # 5 SecretStore setup
 
-Store sensitive values securely:
+Initialize SecretStore and store the secrets:
+```powershell
+cd c:\script
+.\LetsEncryptWebport.ps1 -InitSecretStore
+```
+- The first time, you are asked for a SecretStore unlock password. It is saved encrypted in `securePassword.xml`.
+- `PluginArgs` is taken from `$pArgs` in the current session, or from `PoshAcme-AzureDns-PluginConfig.json` next to the script. If neither exists, create `$pArgs` (see [2. DNS Plugin Configuration](#2-dns-plugin-configuration)) and run `-InitSecretStore` again.
+- You are prompted for `PfxPass` (the same password used when creating the CSR in WebPort) and `SmtpPwd`.
+- Secrets that already exist are left unchanged.
+
+Or store the secrets manually:
 ```powershell
 Set-Secret -Name PluginArgs -Secret $pArgs
 Set-Secret -Name PfxPass -Secret "same-password-used-when-creating-the-CSR-in-WebPort"
@@ -253,7 +254,7 @@ WARNING: No Certficate Attributes found in CR.
 ### `Unlock-SecretStore: Store file integrity check failed`
 
 ```
-Unlock-SecretStore: C:\script\LetsEncryptWebport.ps1:1125
+Unlock-SecretStore: C:\script\LetsEncryptWebport.ps1:<line>
      | Store file integrity check failed. The provided password may be invalid, or store files have become corrupted or have been tampered with.
 ```
 
@@ -270,7 +271,7 @@ Run the script again and enter the **old** password.
 $pw = Import-CliXml C:\script\securePassword.xml
 Reset-SecretStore -Authentication Password -Password $pw -Interaction None -Force
 ```
-Add the secrets again in the same session (the store is unlocked), then run the script again:
+Add the secrets again with `.\LetsEncryptWebport.ps1 -InitSecretStore`, or manually in the same session (the store is unlocked), then run the script again:
 ```powershell
 # $pArgs must be created first – see 2. DNS Plugin Configuration
 Set-Secret -Name PluginArgs -Secret $pArgs
@@ -287,6 +288,7 @@ Get-SecretInfo
 
 | Version | Date | Changes |
 |---|---|---|
+| 1.4.1 | 2026-10-25 | New `-InitSecretStore` switch: initializes SecretStore, adds missing secrets and exits. Documented Azure login (`Connect-AzAccount`) before `Deploy-PoshAcmeAzure.ps1` and the `Store file integrity check failed` SecretStore error. |
 | 1.4.0 | 2026-10-13 | `-ServerPort` no longer defaults to 8090 — the port in `webport.conf` is kept unless `-ServerPort` is given explicitly. Script aborts early if WebPort is not found in `-WebPortProgPath`/`-WebPortDataPath`. Scheduled task no longer stores `-ServerPort`; time limit raised from 5 to 30 minutes. Fixed certificate lookup when `SSLCN` contains SAN (caused renewal on every run). Documented the `asn1: sequence truncated` CSR error. OpenSSL install command now resolves the latest 3.x version (old link returned 404). Fixed cmdlet name `Set-DefaultSecretVault` → `Set-SecretVaultDefault`. Supports SecretStore configured without password (`Authentication = None`). |
 | 1.3.0 | 2026-06-04 | Support for `Microsoft.Data.Sqlite` (newer WebPort versions), with fallback to `System.Data.SQLite`. Documentation for Azure DNS, SecretStore, CN/SAN and port 443. |
 | 1.2.0 | 2026-03-03 | `-CreateScheduledTask` (weekly renewal via PowerShell 7). OpenSSL check with automatic VC++ x64 runtime install. SMTP password read from SecretStore (`SmtpPwd`). Added `Deploy-PoshAcmeAzure.ps1`. |
@@ -299,4 +301,4 @@ Get-SecretInfo
 # Author
 
 **Original Author:** Magnus Ardström  
-Current version: 1.4.0 — 2026-10-13  
+Current version: 1.4.1 — 2026-10-25  
