@@ -36,6 +36,13 @@ PARAMETERS
       paths and Sendmail. No certificate is issued when the task is created.
       ServerPort is not stored in the task; it is read from webport.conf.
 
+  -InitSecretStore
+      Registers and unlocks SecretStore (asks for the unlock password the
+      first time), adds missing secrets and exits. PluginArgs is taken from
+      $pArgs in the session or PoshAcme-AzureDns-PluginConfig.json next to
+      the script; PfxPass and SmtpPwd are prompted for. Existing secrets are
+      left unchanged.
+
   -ServerPort
       Only needed to change WebPort's port. If omitted, the port in
       webport.conf is used and left unchanged.
@@ -146,6 +153,7 @@ Display plugin documentation:
     Version:            1.2.0   2026-03-03
     Version:            1.3.0   2026-06-04
     Version:            1.4.0   2026-10-13
+    Version:            1.4.1   2026-10-25
 
 #>
 
@@ -158,14 +166,19 @@ param(
     [Parameter(ParameterSetName="CreateScheduledTask", Mandatory=$true)]
     [switch]$CreateScheduledTask,
 
+    [Parameter(ParameterSetName="InitSecretStore", Mandatory=$true)]
+    [switch]$InitSecretStore,
+
     [Parameter(ParameterSetName="Normal")]
     [Parameter(ParameterSetName="FailSafe")]
     [Parameter(ParameterSetName="CreateScheduledTask")]
+    [Parameter(ParameterSetName="InitSecretStore")]
     [string]$WebPortDataPath = "C:\ProgramData\WebPort",
 
     [Parameter(ParameterSetName="Normal")]
     [Parameter(ParameterSetName="FailSafe")]
     [Parameter(ParameterSetName="CreateScheduledTask")]
+    [Parameter(ParameterSetName="InitSecretStore")]
     [string]$WebPortProgPath = "C:\Program Files\WebPort",
 
     [Parameter(ParameterSetName="Normal")]
@@ -1100,8 +1113,14 @@ if ($UseSecretStore -and !$failsafe) {
     }
 
 
+    # SecretStore kan vara konfigurerad utan lösenord (Authentication = None)
+    $storeAuth = (Get-SecretStoreConfiguration).Authentication
+    if ($storeAuth -eq 'None') {
+        Write-Host "   ✓ SecretStore kräver inget lösenord (Authentication = None) → hoppar över upplåsning" -ForegroundColor Green
+    }
+
     # Kontrollera lösenordsfil
-    if (-not (Test-Path $SecurePasswordPath)) {
+    if ($storeAuth -ne 'None' -and -not (Test-Path $SecurePasswordPath)) {
         Write-Host "   ⚠ securePasswordPath saknas → skapar..." -ForegroundColor Yellow
 
         Write-Host "   Detta är lösenordet som låser upp PowerShell SecretStore." -ForegroundColor Gray
@@ -1114,9 +1133,60 @@ if ($UseSecretStore -and !$failsafe) {
     }
 
     # Lås upp SecretStore
-    $password = Import-CliXml -Path $SecurePasswordPath
-    Unlock-SecretStore -Password $password -ErrorAction Stop
-    Write-Host "   ✓ SecretStore upplåst" -ForegroundColor Green
+    if ($storeAuth -ne 'None') {
+        $password = Import-CliXml -Path $SecurePasswordPath
+        Unlock-SecretStore -Password $password -ErrorAction Stop
+        Write-Host "   ✓ SecretStore upplåst" -ForegroundColor Green
+    }
+
+    # -InitSecretStore: lägg in secrets som saknas och avsluta
+    if ($InitSecretStore) {
+        step "Initierar secrets"
+
+        if (Get-SecretInfo -Name "PluginArgs" -Vault SecretStore) {
+            ok "PluginArgs finns redan"
+        }
+        else {
+            $pluginConfigPath = Join-Path $ScriptRoot "PoshAcme-AzureDns-PluginConfig.json"
+            $sessionPArgs = (Get-Variable -Name pArgs -Scope Global -ErrorAction SilentlyContinue).Value
+
+            if ($sessionPArgs) {
+                Set-Secret -Name "PluginArgs" -Secret $sessionPArgs -Vault SecretStore
+                ok "PluginArgs sparad från `$pArgs i sessionen"
+            }
+            elseif (Test-Path $pluginConfigPath) {
+                $fileArgs = @{}
+                (Get-Content $pluginConfigPath -Raw | ConvertFrom-Json).PluginArgs.PSObject.Properties |
+                    ForEach-Object { $fileArgs[$_.Name] = $_.Value }
+                Set-Secret -Name "PluginArgs" -Secret $fileArgs -Vault SecretStore
+                ok "PluginArgs sparad från $pluginConfigPath"
+            }
+            else {
+                warn "PluginArgs saknas: skapa `$pArgs (se https://poshac.me/docs/v4/Plugins/ eller kör Deploy-PoshAcmeAzure.ps1) och kör -InitSecretStore igen"
+            }
+        }
+
+        foreach ($s in @(
+            @{ Name = "PfxPass"; Prompt = "Ange PfxPass (samma lösenord som när CSR skapades i WebPort)" },
+            @{ Name = "SmtpPwd"; Prompt = "Ange SmtpPwd (SMTP-lösenord)" }
+        )) {
+            if (Get-SecretInfo -Name $s.Name -Vault SecretStore) {
+                ok "$($s.Name) finns redan"
+                continue
+            }
+            $value = Read-Host $s.Prompt -AsSecureString
+            if ($value.Length -eq 0) {
+                warn "$($s.Name) hoppades över (tomt värde)"
+                continue
+            }
+            Set-Secret -Name $s.Name -Secret $value -Vault SecretStore
+            ok "$($s.Name) sparad"
+        }
+
+        Get-SecretInfo -Vault SecretStore | Format-Table Name, Type -AutoSize
+        ok "SecretStore initierad"
+        return
+    }
 
     try {
         $PluginArgs = Get-Secret -Name "PluginArgs" -AsPlainText
